@@ -97,12 +97,38 @@ end
 function Device:UIManagerReady(uimgr)
     SDLDevice.UIManagerReady(self, uimgr)
     self.uimgr = uimgr
+    logger.info("iOS UIManager ready; enabling settings flush")
+    self:flushSettingsForIOS("startup")
     uimgr:scheduleIn(0.5, function() self:applySafeAreaViewport() end)
     uimgr:scheduleIn(1.5, function() self:applySafeAreaViewport() end)
+    uimgr:scheduleIn(5, function() self:flushSettingsForIOSPeriodically() end)
+end
+
+function Device:flushSettingsForIOS(reason)
+    if self.uimgr then
+        self.uimgr:flushSettings()
+    end
+    if G_reader_settings then
+        logger.info("iOS settings flush:", reason or "manual", G_reader_settings.file or "unknown")
+        local ok, err = pcall(function() G_reader_settings:flush() end)
+        if not ok then
+            logger.warn("iOS settings flush failed:", err)
+        end
+    else
+        logger.warn("iOS settings flush skipped: G_reader_settings is nil")
+    end
+end
+
+function Device:flushSettingsForIOSPeriodically()
+    self:flushSettingsForIOS("periodic")
+    if self.uimgr then
+        self.uimgr:scheduleIn(5, function() self:flushSettingsForIOSPeriodically() end)
+    end
 end
 
 function Device:simulateSuspend()
     logger.info("iOS app entering background; flushing settings")
+    self:flushSettingsForIOS("suspend")
     self:_beforeSuspend(false)
 end
 
