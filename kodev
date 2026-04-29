@@ -88,6 +88,9 @@ function run_make() {
     if [[ "${TARGET}" == 'android' ]]; then
         cmd+=("ANDROID_ARCH=${ANDROID_ARCH}")
     fi
+    if [[ "${TARGET}" == 'ios' ]]; then
+        cmd+=("IOS_ARCH=${IOS_ARCH}")
+    fi
     for param in TARGET KODEBUG VERBOSE; do
         cmd+=("${param}=${!param}")
     done
@@ -133,6 +136,8 @@ TARGET:
     android-arm64
     android-x86
     android-x86_64
+    ios-arm64                 iOS device build for private sideloading
+    ios-sim-arm64             iOS simulator build
     cervantes
     emulator                  Default if no TARGET is given
     kindle                    Compatible with all Kindle models >= Kindle4
@@ -173,6 +178,10 @@ function setup_target() {
         android-arm | android-arm64 | android-x86 | android-x86_64)
             ANDROID_ARCH="${TARGET#android-}"
             TARGET='android'
+            ;;
+        ios-arm64 | ios-sim-arm64)
+            IOS_ARCH="${TARGET#ios-}"
+            TARGET='ios'
             ;;
         cervantes) ;;
         kindle | kindlehf | kindlepw2 | kindle-legacy) ;;

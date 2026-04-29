@@ -134,7 +134,7 @@ export LC_ALL=C
 # We need to use the full path to the executable to avoid
 # a weird issue when using the p7zip project pre-built
 # binary (`Can't load './7z.dll' (7z.so)...`).
-if ! sevenzip="$(which 7z)"; then
+if ! sevenzip="$(command -v 7z || command -v 7zz)"; then
     echo "ERROR: 7z executable not found!" 1>&2
     exit 2
 fi

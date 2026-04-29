@@ -20,6 +20,9 @@ ifdef KODEBUG
 	MACHINE:=$(MACHINE)-debug
 	KODEDUG_SUFFIX:=-debug
 endif
+ifeq ($(TARGET), ios)
+	MACHINE:=$(MACHINE)-$(IOS_SDK)
+endif
 
 ifdef TARGET
 	DIST:=$(TARGET)
@@ -133,6 +136,9 @@ all: base mo
 ifdef ANDROID
 	rm -f android-fdroid-version; echo -e "$(ANDROID_NAME)\n$(ANDROID_VERSION)" > koreader-android-fdroid-latest
 endif
+ifdef IOS
+	rm -rf $(INSTALL_DIR)/koreader/fonts
+endif
 	$(SYMLINK) $(KOR_BASE)/ev_replay.py $(INSTALL_DIR)/koreader/
 	bash -O extglob -c '$(SYMLINK) $(OUTPUT_DIR_ARTIFACTS) $(INSTALL_DIR)/koreader/'
 ifneq (,$(EMULATE_READER))
@@ -145,6 +151,9 @@ endif
 	$(SYMLINK) $(INSTALL_FILES) $(INSTALL_DIR)/koreader/
 ifdef ANDROID
 	$(SYMLINK) $(ANDROID_DIR)/*.lua $(INSTALL_DIR)/koreader/
+endif
+ifdef IOS
+	$(SYMLINK) $(IOS_DIR)/*.lua $(INSTALL_DIR)/koreader/
 endif
 	@echo "[*] Install update once marker"
 	@echo "# This file indicates that update once patches have not been applied yet." > $(INSTALL_DIR)/koreader/update_once.marker

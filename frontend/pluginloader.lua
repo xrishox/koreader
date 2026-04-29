@@ -267,7 +267,7 @@ function PluginLoader:genPluginManagerSubItem()
         table.sort(self.all_plugins, function(v1, v2) return v1.fullname < v2.fullname end)
     end
 
-    local plugin_table = {}
+    local plugin_table = require("pluginpackagemanager"):genIOSMenuItems()
     for __, plugin in ipairs(self.all_plugins) do
         table.insert(plugin_table, {
             text = plugin.fullname,

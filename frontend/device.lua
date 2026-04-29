@@ -1,10 +1,15 @@
 local isAndroid, _ = pcall(require, "android")
+local isIOS, _ = pcall(require, "ios")
 local lfs = require("libs/libkoreader-lfs")
 local util = require("ffi/util")
 
 local function probeDevice()
     if isAndroid then
         return require("device/android/device")
+    end
+
+    if isIOS then
+        return require("device/ios/device")
     end
 
     local kindle_test_stat = lfs.attributes("/proc/usid")

@@ -1,5 +1,6 @@
 -- need low-level mechanism to detect android to avoid recursive dependency
 local isAndroid, android = pcall(require, "android")
+local isIOS, ios = pcall(require, "ios")
 local lfs = require("libs/libkoreader-lfs")
 
 local DataStorage = {}
@@ -14,6 +15,8 @@ function DataStorage:getDataDir()
         data_dir = os.getenv("KO_HOME")
     elseif isAndroid then
         data_dir = android.getExternalStoragePath() .. "/koreader"
+    elseif isIOS then
+        data_dir = ios.getDataDir()
     elseif os.getenv("UBUNTU_APPLICATION_ISOLATION") then
         local app_id = os.getenv("APP_ID")
         local package_name = app_id:match("^(.-)_")
