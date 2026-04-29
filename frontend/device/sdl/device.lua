@@ -274,6 +274,10 @@ function Device:init()
             elseif ev.code == SDL.SDL.SDL_EVENT_WINDOW_MOVED then
                 self.window.left = ev.value.data1
                 self.window.top = ev.value.data2
+            elseif ev.code == SDL.SDL.SDL_EVENT_WILL_ENTER_BACKGROUND then
+                return Event:new("Suspend")
+            elseif ev.code == SDL.SDL.SDL_EVENT_DID_ENTER_FOREGROUND then
+                return Event:new("Resume")
             elseif ev.code == SDL.SDL.SDL_EVENT_TEXT_INPUT then
                 UIManager:sendEvent(Event:new("TextInput", tostring(ev.value)))
             end

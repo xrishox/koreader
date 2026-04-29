@@ -710,6 +710,17 @@ function BookInfoManager:extractInBackground(files)
         logger.dbg("  BG extraction done")
     end
 
+    if Device:isIOS() then
+        logger.info("Running book info extraction in foreground on iOS")
+        self.cleanup_needed = true
+        local ok, err = xpcall(task, debug.traceback)
+        self:cleanUp()
+        if not ok then
+            logger.warn("Foreground book info extraction failed on iOS:", err)
+        end
+        return true
+    end
+
     self.cleanup_needed = true -- so we will remove temporary cache directory created by subprocess
 
     -- If it's the first subprocess we're launching, enable 2 CPU cores

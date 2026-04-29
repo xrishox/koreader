@@ -16,7 +16,7 @@ local Device = SDLDevice:extend{
     hasDPad = no,
     canRestart = no,
     hasExitOptions = no,
-    canSuspend = no,
+    canSuspend = yes,
     canStandby = no,
     hasSystemFonts = no,
     hasOTAUpdates = no,
@@ -99,6 +99,17 @@ function Device:UIManagerReady(uimgr)
     self.uimgr = uimgr
     uimgr:scheduleIn(0.5, function() self:applySafeAreaViewport() end)
     uimgr:scheduleIn(1.5, function() self:applySafeAreaViewport() end)
+end
+
+function Device:simulateSuspend()
+    logger.info("iOS app entering background; flushing settings")
+    self:_beforeSuspend(false)
+end
+
+function Device:simulateResume()
+    logger.info("iOS app entering foreground")
+    self.powerd:invalidateCapacityCache()
+    self:_afterResume(false)
 end
 
 function Device:getClipboardText()
