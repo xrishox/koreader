@@ -344,6 +344,10 @@ function ReaderThumbnail:ensureTileGeneration()
 end
 
 function ReaderThumbnail:startTileGeneration(request)
+    if Device.canRunInSubProcess and not Device:canRunInSubProcess() then
+        logger.info("PageBrowserWidget thumbnail generation skipped: subprocesses are unsupported on this device")
+        return false
+    end
     local pid, parent_read_fd = ffiutil.runInSubProcess(function(pid, child_write_fd)
         -- Get page image as if drawn on the screen
         local bb = self:_getPageImage(request.page)

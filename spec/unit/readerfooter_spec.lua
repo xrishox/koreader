@@ -1,5 +1,5 @@
 describe("Readerfooter module", function()
-    local DocumentRegistry, ReaderUI, ReaderFooter, DocSettings, UIManager
+    local DocumentRegistry, ReaderUI, ReaderFooter, DocSettings, UIManager, Device
     local purgeDir, Screen
     local tapFooterMenu
     local sample_epub = "spec/front/unit/data/juliet.epub"
@@ -14,7 +14,7 @@ describe("Readerfooter module", function()
     setup(function()
         require("commonrequire")
         disable_plugins()
-        local Device = require("device")
+        Device = require("device")
         -- Override powerd for running tests on devices with batteries.
         Device.powerd.isChargingHW = function() return false end
         Device.powerd.getCapacityHW = function() return 0 end
@@ -91,7 +91,10 @@ describe("Readerfooter module", function()
 
     after_each(function()
         fastforward_ui_events()
-        readerui:onClose()
+        if readerui then
+            readerui:onClose()
+            readerui = nil
+        end
         UIManager:quit()
         purgeDir(DocSettings:getSidecarDir(sample_epub))
         os.remove(DocSettings:getHistoryPath(sample_epub))
@@ -594,6 +597,36 @@ describe("Readerfooter module", function()
         assert.falsy(footer.has_no_mode)
         assert.truthy(readerui.view.footer_visible)
         assert.is.same(15, footer:getHeight())
+    end)
+
+    it("should not subtract the iOS bottom safe area from reserved footer height", function()
+        local old_is_ios = Device.isIOS
+        local old_get_bottom_safe_area_inset = Device.getBottomSafeAreaInset
+        local old_get_size
+        local ok, err = pcall(function()
+            Device.isIOS = function() return true end
+            Device.getBottomSafeAreaInset = function() return 20 end
+            G_reader_settings:saveSetting("reader_footer_mode", 2)
+
+            readerui = ReaderUI:new{
+                dimen = Screen:getSize(),
+                document = DocumentRegistry:openDocument(sample_epub),
+            }
+            local footer = readerui.view.footer
+            old_get_size = footer.footer_content.getSize
+            footer.footer_content.getSize = function()
+                return { h = 42 }
+            end
+            footer.top_padding = 12
+
+            assert.is.same(30, footer:getReservedHeight())
+        end)
+        if readerui and old_get_size then
+            readerui.view.footer.footer_content.getSize = old_get_size
+        end
+        Device.isIOS = old_is_ios
+        Device.getBottomSafeAreaInset = old_get_bottom_safe_area_inset
+        assert.is_true(ok, err)
     end)
 
     it("should return correct footer height when all modes are disabled", function()

@@ -1,4 +1,5 @@
 local SDLDevice = require("device/sdl/device")
+local Event = require("ui/event")
 local Geom = require("ui/geometry")
 local ios = require("ios")
 local logger = require("logger")
@@ -18,6 +19,8 @@ local Device = SDLDevice:extend{
     hasExitOptions = no,
     canSuspend = yes,
     canStandby = no,
+    canBackgroundRerender = no,
+    canRunInSubProcess = no,
     hasSystemFonts = no,
     hasOTAUpdates = no,
     home_dir = ios.getDocumentsPath(),
@@ -37,6 +40,9 @@ local Device = SDLDevice:extend{
     getPluginZipImportResult = function()
         return ios.getPluginZipImportResult()
     end,
+    consumePluginZipImportResult = function()
+        return ios.consumePluginZipImportResult()
+    end,
 }
 
 function Device:init()
@@ -47,11 +53,14 @@ end
 
 function Device:applySafeAreaViewport()
     local insets = ios.getSafeAreaInsets()
+    local previous_insets = self.ios_safe_area_insets or { top = 0, right = 0, bottom = 0, left = 0 }
+    local insets_changed = previous_insets.top ~= insets.top
+        or previous_insets.right ~= insets.right
+        or previous_insets.bottom ~= insets.bottom
+        or previous_insets.left ~= insets.left
+    self.ios_safe_area_insets = insets
     logger.info(string.format("iOS safe area insets: top=%d right=%d bottom=%d left=%d",
         insets.top, insets.right, insets.bottom, insets.left))
-    if insets.top == 0 and insets.right == 0 and insets.bottom == 0 and insets.left == 0 then
-        return
-    end
 
     local screen_w = self.screen:getScreenWidth()
     local screen_h = self.screen:getScreenHeight()
@@ -59,38 +68,76 @@ function Device:applySafeAreaViewport()
         x = insets.left,
         y = insets.top,
         w = screen_w - insets.left - insets.right,
-        h = screen_h - insets.top - insets.bottom,
+        h = screen_h - insets.top,
     }
     if viewport.w <= 0 or viewport.h <= 0 then
         logger.warn(string.format("Ignoring invalid iOS safe area viewport: x=%d y=%d w=%d h=%d",
             viewport.x, viewport.y, viewport.w, viewport.h))
         return
     end
-    if self.viewport
-    and self.viewport.x == viewport.x
-    and self.viewport.y == viewport.y
-    and self.viewport.w == viewport.w
-    and self.viewport.h == viewport.h then
+    local viewport_changed = not self.viewport
+        or self.viewport.x ~= viewport.x
+        or self.viewport.y ~= viewport.y
+        or self.viewport.w ~= viewport.w
+        or self.viewport.h ~= viewport.h
+    if not viewport_changed and not insets_changed then
         return
     end
 
-    logger.info(string.format("iOS safe area viewport: x=%d y=%d w=%d h=%d",
-        viewport.x, viewport.y, viewport.w, viewport.h))
-    self.viewport = viewport
-    self.screen:setViewport(viewport)
-    if self.screen.full_bb and self.screen._render then
-        self.screen.full_bb:fill(require("ffi/blitbuffer").COLOR_WHITE)
-        self.screen:_render(self.screen.full_bb, 0, 0, screen_w, screen_h)
+    if viewport_changed then
+        logger.info(string.format("iOS safe area viewport: x=%d y=%d w=%d h=%d",
+            viewport.x, viewport.y, viewport.w, viewport.h))
+        self.viewport = viewport
+        self.screen:setViewport(viewport)
+        if self.screen.full_bb and self.screen._render then
+            self.screen.full_bb:fill(require("ffi/blitbuffer").COLOR_WHITE)
+            self.screen:_render(self.screen.full_bb, 0, 0, screen_w, screen_h)
+        end
     end
+
+    self.ios_safe_area_input_offset = self.ios_safe_area_input_offset or { x = 0, y = 0 }
+    self.ios_safe_area_input_offset.x = 0 - viewport.x
+    self.ios_safe_area_input_offset.y = 0 - viewport.y
     if not self.ios_safe_area_input_adjusted then
         self.input:registerEventAdjustHook(
             self.input.adjustTouchTranslate,
-            { x = 0 - viewport.x, y = 0 - viewport.y }
+            self.ios_safe_area_input_offset
         )
         self.ios_safe_area_input_adjusted = true
     end
+
     if self.uimgr then
+        local usable_size = self:getReaderUsableScreenSize()
+        self.uimgr:broadcastEvent(Event:new("SetDimensions", usable_size))
+        self.uimgr:broadcastEvent(Event:new("ScreenResize", usable_size))
+        self.uimgr:broadcastEvent(Event:new("RedrawCurrentPage"))
         self.uimgr:setDirty("all", "full")
+    end
+end
+
+function Device:getSafeAreaInsets()
+    return self.ios_safe_area_insets or { top = 0, right = 0, bottom = 0, left = 0 }
+end
+
+function Device:getBottomSafeAreaInset()
+    return self:getSafeAreaInsets().bottom or 0
+end
+
+function Device:getTopSafeAreaInset()
+    return self:getSafeAreaInsets().top or 0
+end
+
+function Device:getReaderUsableScreenSize()
+    return Geom:new{
+        w = self.screen:getWidth(),
+        h = self.screen:getHeight() - self:getBottomSafeAreaInset(),
+    }
+end
+
+function Device:scheduleIOSSettingsFlush()
+    if self.uimgr and not self.ios_settings_flush_scheduled then
+        self.ios_settings_flush_scheduled = true
+        self.uimgr:scheduleIn(5, function() self:flushSettingsForIOSPeriodically() end)
     end
 end
 
@@ -101,7 +148,7 @@ function Device:UIManagerReady(uimgr)
     self:flushSettingsForIOS("startup")
     uimgr:scheduleIn(0.5, function() self:applySafeAreaViewport() end)
     uimgr:scheduleIn(1.5, function() self:applySafeAreaViewport() end)
-    uimgr:scheduleIn(5, function() self:flushSettingsForIOSPeriodically() end)
+    self:scheduleIOSSettingsFlush()
 end
 
 function Device:flushSettingsForIOS(reason)
@@ -120,10 +167,9 @@ function Device:flushSettingsForIOS(reason)
 end
 
 function Device:flushSettingsForIOSPeriodically()
+    self.ios_settings_flush_scheduled = false
     self:flushSettingsForIOS("periodic")
-    if self.uimgr then
-        self.uimgr:scheduleIn(5, function() self:flushSettingsForIOSPeriodically() end)
-    end
+    self:scheduleIOSSettingsFlush()
 end
 
 function Device:simulateSuspend()
@@ -134,7 +180,9 @@ end
 
 function Device:simulateResume()
     logger.info("iOS app entering foreground")
-    self.powerd:invalidateCapacityCache()
+    if self.powerd and self.powerd.invalidateCapacityCache then
+        self.powerd:invalidateCapacityCache()
+    end
     self:_afterResume(false)
 end
 

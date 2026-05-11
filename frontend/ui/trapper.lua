@@ -10,6 +10,7 @@ Mostly done with coroutines, but hides their usage for simplicity.
 
 
 local ConfirmBox = require("ui/widget/confirmbox")
+local Device = require("device")
 local InfoMessage = require("ui/widget/infomessage")
 local TrapWidget = require("ui/widget/trapwidget")
 local UIManager = require("ui/uimanager")
@@ -339,6 +340,11 @@ and use it as a wrapper.
 @treturn string output of command
 ]]
 function Trapper:dismissablePopen(cmd, trap_widget_or_string)
+    if Device.canRunInSubProcess and not Device:canRunInSubProcess() then
+        logger.warn("dismissablePopen() unavailable: subprocesses are unsupported on this device")
+        return false, _("Subprocesses are not supported on this device.")
+    end
+
     local _coroutine = coroutine.running()
     -- assert(_coroutine ~= nil, "Need to be called from a coroutine")
     if not _coroutine then
@@ -498,6 +504,11 @@ Notes and limitations:
 @return ... return values of task
 ]]
 function Trapper:dismissableRunInSubprocess(task, trap_widget_or_string, task_returns_simple_string)
+    if Device.canRunInSubProcess and not Device:canRunInSubProcess() then
+        logger.info("dismissableRunInSubprocess() running synchronously: subprocesses are unsupported on this device")
+        return true, task()
+    end
+
     local _coroutine = coroutine.running()
     if not _coroutine then
         logger.warn("unwrapped dismissableRunInSubprocess(), falling back to blocking in-process run")

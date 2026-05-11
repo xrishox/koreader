@@ -1,10 +1,11 @@
 describe("FileManager module", function()
-    local DataStorage, FileManager, lfs, docsettings, UIManager, Screen, makePath, util
+    local DataStorage, Device, FileManager, lfs, docsettings, UIManager, Screen, makePath, util
     setup(function()
         require("commonrequire")
         disable_plugins()
         require("document/canvascontext"):init(require("device"))
         DataStorage = require("datastorage")
+        Device = require("device")
         FileManager = require("apps/filemanager/filemanager")
         Screen = require("device").screen
         UIManager = require("ui/uimanager")
@@ -12,6 +13,36 @@ describe("FileManager module", function()
         lfs = require("libs/libkoreader-lfs")
         makePath = require("util").makePath
         util = require("ffi/util")
+    end)
+    it("should preserve file command destination semantics on iOS", function()
+        local old_is_ios = Device.isIOS
+        Device.isIOS = function() return true end
+        local tmp_dir = DataStorage:getDataDir() .. "/filemanager-ios-copy-spec"
+        util.purgeDir(tmp_dir)
+        local ok, err = pcall(function()
+            assert.is_true(makePath(tmp_dir .. "/source/sub"))
+            assert.is_true(makePath(tmp_dir .. "/dest"))
+            local fp = assert(io.open(tmp_dir .. "/source/sub/file.txt", "w"))
+            fp:write("copied")
+            fp:close()
+            fp = assert(io.open(tmp_dir .. "/move.txt", "w"))
+            fp:write("moved")
+            fp:close()
+
+            assert.is_false(FileManager:copyRecursive(tmp_dir .. "/source", tmp_dir .. "/source/nested-copy"))
+            assert.is_nil(lfs.attributes(tmp_dir .. "/source/nested-copy", "mode"))
+            assert.is_false(FileManager:copyRecursive(tmp_dir .. "/source", tmp_dir .. "/source/deep/nested-copy"))
+            assert.is_nil(lfs.attributes(tmp_dir .. "/source/deep", "mode"))
+            assert.is_true(FileManager:copyRecursive(tmp_dir .. "/source", tmp_dir .. "/dest"))
+            assert.are.equal("file", lfs.attributes(tmp_dir .. "/dest/source/sub/file.txt", "mode"))
+            assert.is_true(FileManager:moveFile(tmp_dir .. "/move.txt", tmp_dir .. "/dest"))
+            assert.are.equal("file", lfs.attributes(tmp_dir .. "/dest/move.txt", "mode"))
+            assert.is_nil(lfs.attributes(tmp_dir .. "/move.txt", "mode"))
+        end)
+
+        Device.isIOS = old_is_ios
+        util.purgeDir(tmp_dir)
+        assert.is_true(ok, err)
     end)
     it("should show file manager", function()
         local filemanager = FileManager:new{

@@ -100,7 +100,7 @@ function ReaderMenu:initGesListener()
 
     local DTAP_ZONE_MENU = G_defaults:readSetting("DTAP_ZONE_MENU")
     local DTAP_ZONE_MENU_EXT = G_defaults:readSetting("DTAP_ZONE_MENU_EXT")
-    self.ui:registerTouchZones({
+    local zones = {
         {
             id = "readermenu_tap",
             ges = "tap",
@@ -176,7 +176,26 @@ function ReaderMenu:initGesListener()
             },
             handler = function(ges) return self:onSwipeShowMenu(ges) end,
         },
-    })
+    }
+    if Device:isIOS() and Device.getTopSafeAreaInset then
+        local top_inset = Device:getTopSafeAreaInset()
+        if top_inset > 0 then
+            table.insert(zones, {
+                id = "readermenu_ios_unsafe_top_tap",
+                ges = "tap",
+                screen_zone = {
+                    ratio_x = 0, ratio_y = -top_inset / Screen:getHeight(),
+                    ratio_w = 1, ratio_h = top_inset / Screen:getHeight(),
+                },
+                overrides = {
+                    "tap_forward",
+                    "tap_backward",
+                },
+                handler = function(ges) return self:onTapShowMenu(ges) end,
+            })
+        end
+    end
+    self.ui:registerTouchZones(zones)
 end
 
 ReaderMenu.onReaderReady = ReaderMenu.initGesListener

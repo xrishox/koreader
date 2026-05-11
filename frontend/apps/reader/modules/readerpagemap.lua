@@ -193,7 +193,7 @@ function ReaderPageMap:updateVisibleLabels()
     end
     self.container:clear()
     local page_labels = self.ui.document:getPageMapVisiblePageLabels()
-    local footer_height = ((self.view.footer_visible and not self.view.footer.settings.reclaim_height) and 1 or 0) * self.view.footer:getHeight()
+    local footer_height = ((self.view.footer_visible and not self.view.footer.settings.reclaim_height) and 1 or 0) * self.view.footer:getReservedHeight()
     local max_y = Screen:getHeight() - footer_height
     local last_label_bottom_y = 0
     local on_second_page = false

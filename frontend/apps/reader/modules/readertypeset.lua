@@ -546,7 +546,7 @@ function ReaderTypeset:onSetPageMargins(margins, when_applied_callback)
     if self.view.footer.reclaim_height then
         bottom = Screen:scaleBySize(margins[4])
     else
-        bottom = Screen:scaleBySize(margins[4]) + self.view.footer:getHeight()
+        bottom = Screen:scaleBySize(margins[4]) + self.view.footer:getReservedHeight()
     end
     self.ui.document:setPageMargins(left, top, right, bottom)
     self.ui:handleEvent(Event:new("UpdatePos"))
@@ -570,7 +570,7 @@ Tap to dismiss.]]),
             optionsutil.formatFlexSize(margins[3]),
             optionsutil.formatFlexSize(margins[2]),
             optionsutil.formatFlexSize(margins[4]),
-            self.view.footer.reclaim_height and 0 or self.view.footer:getHeight()),
+            self.view.footer.reclaim_height and 0 or self.view.footer:getReservedHeight()),
             dismiss_callback = when_applied_callback,
         })
     end

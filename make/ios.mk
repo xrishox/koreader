@@ -24,7 +24,10 @@ endef
 
 update: all
 	rm -rf $(IOS_APP) $(INSTALL_DIR)/Payload
-	if [ -L $(INSTALL_DIR)/koreader/fonts ]; then rm $(INSTALL_DIR)/koreader/fonts; install -d $(INSTALL_DIR)/koreader/fonts; cp -R resources/fonts/* $(INSTALL_DIR)/koreader/fonts/; cp resources/fonts/noto/NotoSans-Regular.ttf resources/fonts/noto/NotoSans-Bold.ttf resources/fonts/droid/DroidSansMono.ttf $(INSTALL_DIR)/koreader/fonts/; install -d $(INSTALL_DIR)/koreader/fonts/host; fi
+	rm -rf $(INSTALL_DIR)/koreader/fonts
+	install -d $(INSTALL_DIR)/koreader/fonts
+	cp -R resources/fonts/* $(INSTALL_DIR)/koreader/fonts/
+	install -d $(INSTALL_DIR)/koreader/fonts/host
 	cmake -S $(IOS_DIR)/native -B $(IOS_NATIVE_BUILD) -G Ninja \
 		-DCMAKE_SYSTEM_NAME=iOS \
 		-DCMAKE_OSX_SYSROOT=$(IOS_SDK) \

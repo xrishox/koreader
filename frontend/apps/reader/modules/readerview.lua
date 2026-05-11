@@ -27,6 +27,13 @@ local _ = require("gettext")
 local Screen = Device.screen
 local T = require("ffi/util").template
 
+local function getReaderUsableScreenSize()
+    if Device.getReaderUsableScreenSize then
+        return Device:getReaderUsableScreenSize()
+    end
+    return Screen:getSize()
+end
+
 local ReaderView = OverlapGroup:extend{
     document = nil,
     view_modules = nil, -- array
@@ -774,7 +781,7 @@ function ReaderView:recalculate()
         -- reset our size
         self.visible_area:setSizeTo(self.dimen)
         if self.footer_visible and not self.footer.settings.reclaim_height then
-            self.visible_area.h = self.visible_area.h - self.footer:getHeight()
+            self.visible_area.h = self.visible_area.h - self.footer:getReservedHeight()
         end
         if self.document.configurable.writing_direction == 0 then
             -- starts from left of page_area
@@ -805,7 +812,7 @@ function ReaderView:recalculate()
     self.state.offset = Geom:new{x = 0, y = 0}
     if self.dimen.h > self.visible_area.h then
         if self.footer_visible and not self.footer.settings.reclaim_height then
-            self.state.offset.y = (self.dimen.h - (self.visible_area.h + self.footer:getHeight())) / 2
+            self.state.offset.y = (self.dimen.h - (self.visible_area.h + self.footer:getReservedHeight())) / 2
         else
             self.state.offset.y = (self.dimen.h - self.visible_area.h) / 2
         end
@@ -924,7 +931,7 @@ function ReaderView:rotate(mode, old_mode)
         UIManager:setDirty(self.dialog, "full")
     else
         UIManager:setDirty(nil, "full") -- SetDimensions will only request a partial, we want a flash
-        local new_screen_size = Screen:getSize()
+        local new_screen_size = getReaderUsableScreenSize()
         self.ui:handleEvent(Event:new("SetDimensions", new_screen_size))
         self.ui:onScreenResize(new_screen_size)
         self.ui:handleEvent(Event:new("InitScrollPageStates"))
@@ -1074,7 +1081,7 @@ function ReaderView:onReaderFooterVisibilityChange()
             -- NOTE: ReaderView:recalculate will snap visible_area to page_area edges (depending on zoom direction).
             --       We don't actually want to move here, so save & restore our current visible_area *coordinates*...
             local x, y = self.visible_area.x, self.visible_area.y
-            self.ui:handleEvent(Event:new("SetDimensions", Screen:getSize()))
+            self.ui:handleEvent(Event:new("SetDimensions", getReaderUsableScreenSize()))
             self.visible_area.x = x
             self.visible_area.y = y
 
@@ -1088,9 +1095,9 @@ function ReaderView:onReaderFooterVisibilityChange()
                 -- Not sure if this can ever be `nil`...
                 if bottom_page then
                     if self.footer_visible then
-                        bottom_page.visible_area.h = bottom_page.visible_area.h - self.footer:getHeight()
+                        bottom_page.visible_area.h = bottom_page.visible_area.h - self.footer:getReservedHeight()
                     else
-                        bottom_page.visible_area.h = bottom_page.visible_area.h + self.footer:getHeight()
+                        bottom_page.visible_area.h = bottom_page.visible_area.h + self.footer:getReservedHeight()
                     end
                 end
             end

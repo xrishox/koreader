@@ -25,6 +25,7 @@ if ffi_ok then
     int KOIOSGetPluginZipImportStatus(void);
     const char *KOIOSGetPluginZipImportPath(void);
     const char *KOIOSGetPluginZipImportError(void);
+    void KOIOSConsumePluginZipImportResult(void);
     ]]
 end
 
@@ -133,6 +134,13 @@ function ios.getPluginZipImportResult()
         return "failed", cstring(function() return ffi.C.KOIOSGetPluginZipImportError() end, "")
     end
     return "idle"
+end
+
+function ios.consumePluginZipImportResult()
+    if not ffi_ok then
+        return
+    end
+    pcall(function() ffi.C.KOIOSConsumePluginZipImportResult() end)
 end
 
 return ios

@@ -2983,7 +2983,7 @@ function ReaderHighlight:onMoveHighlightIndicator(args)
         if rect.y < alt_status_bar_height then
             rect.y = alt_status_bar_height
         end
-        local footer_height = self.view.footer_visible and self.view.footer:getHeight() or 0
+        local footer_height = self.view.footer_visible and self.view.footer:getReservedHeight() or 0
         local status_bar_height = self.ui.rolling and footer_height or 0 -- for PDFs, status bar is already accounted for
         if rect.y + rect.h > self.view.visible_area.h - status_bar_height then
             rect.y = self.view.visible_area.h - status_bar_height - rect.h

@@ -164,7 +164,13 @@ endif
 	@echo "[*] Install plugins"
 	$(SYMLINK) plugins $(INSTALL_DIR)/koreader/
 	@echo "[*] Install resources"
+ifdef IOS
+	rm -rf $(INSTALL_DIR)/koreader/fonts
+	install -d $(INSTALL_DIR)/koreader/fonts
+	cp -R resources/fonts/* $(INSTALL_DIR)/koreader/fonts/
+else
 	$(SYMLINK) resources/fonts/* $(INSTALL_DIR)/koreader/fonts/
+endif
 	install -d $(INSTALL_DIR)/koreader/{screenshots,fonts/host,ota}
 	# Note: the data dir is distinct from the one in base/build/…!
 	@echo "[*] Install data files"

@@ -18,6 +18,13 @@ local Input = Device.input
 local Screen = Device.screen
 local T = require("ffi/util").template
 
+local function getReaderUsableScreenSize()
+    if Device.getReaderUsableScreenSize then
+        return Device:getReaderUsableScreenSize()
+    end
+    return Screen:getSize()
+end
+
 local band = bit.band
 
 -- We need a small mmap'ped segment to exchange states with forked
@@ -27,10 +34,27 @@ local band = bit.band
 --   shared_state[1] = 0 or 1, set by subprocess when rendering done, waiting to save cache
 --   shared_state[2] = 0 or 1, set by main process when subprocess can go on saving cache
 local ffi = require("ffi")
-local shared_state_data = ffi.C.mmap(nil, 3*ffi.sizeof("uint32_t"), bit.bor(ffi.C.PROT_READ, ffi.C.PROT_WRITE),
-                                       bit.bor(ffi.C.MAP_SHARED, ffi.C.MAP_ANONYMOUS), -1, 0)
-local shared_state = ffi.cast("uint32_t*", shared_state_data)
+local shared_state
+
+local function deviceCanBackgroundRerender()
+    return not Device.canBackgroundRerender or Device:canBackgroundRerender()
+end
+
+if deviceCanBackgroundRerender() then
+    local shared_state_data = ffi.C.mmap(nil, 3*ffi.sizeof("uint32_t"), bit.bor(ffi.C.PROT_READ, ffi.C.PROT_WRITE),
+                                           bit.bor(ffi.C.MAP_SHARED, ffi.C.MAP_ANONYMOUS), -1, 0)
+    local shared_state_data_int = tonumber(ffi.cast("intptr_t", shared_state_data))
+    if shared_state_data_int == ffi.C.MAP_FAILED then
+        logger.warn("CRE background rerendering disabled: mmap shared state failed with errno", ffi.errno())
+    else
+        shared_state = ffi.cast("uint32_t*", shared_state_data)
+    end
+end
 local koreader_pid = ffi.C.getpid()
+
+local function canBackgroundRerender()
+    return shared_state ~= nil and deviceCanBackgroundRerender()
+end
 
 --[[
     Rolling is just like paging in page-based documents except that
@@ -256,6 +280,9 @@ function ReaderRolling:onReadSettings(config)
     else
         self.partial_rerendering = G_reader_settings:nilOrTrue("cre_partial_rerendering")
     end
+    if not canBackgroundRerender() then
+        self.partial_rerendering = false
+    end
 
     -- Set a callback to allow showing load and rendering progress
     -- (this callback will be cleaned up by cre.cpp closeDocument(),
@@ -443,7 +470,7 @@ function ReaderRolling:addToMainMenu(menu_items)
     menu_items.partial_rerendering = {
         text = _("Enable partial renderings"),
         enabled_func = function()
-            return self.ui.document:canBePartiallyRerendered() == true
+            return canBackgroundRerender() and self.ui.document:canBePartiallyRerendered() == true
         end,
         checked_func = function()
             return self.ui.document:isPartialRerenderingEnabled() == true
@@ -892,7 +919,7 @@ end
 function ReaderRolling:onGotoViewRel(diff)
     logger.dbg("goto relative screen:", diff, "in mode:", self.view.view_mode)
     if self.view.view_mode == "scroll" then
-        local footer_height = ((self.view.footer_visible and not self.view.footer.settings.reclaim_height) and 1 or 0) * self.view.footer:getHeight()
+        local footer_height = ((self.view.footer_visible and not self.view.footer.settings.reclaim_height) and 1 or 0) * self.view.footer:getReservedHeight()
         local page_visible_height = self.ui.dimen.h - footer_height
         local pan_diff = diff * page_visible_height
         if self.view.page_overlap_enable then
@@ -1093,7 +1120,7 @@ end
 function ReaderRolling:onSetDimensions(dimen)
     if self.ui.postReaderReadyCallback ~= nil then
         -- ReaderUI:init() not yet done: just set document dimensions
-        self.ui.document:setViewDimen(Screen:getSize())
+        self.ui.document:setViewDimen(getReaderUsableScreenSize())
         -- (what's done in the following else is done elsewhere by
         -- the initialization code)
     else
@@ -1103,7 +1130,7 @@ function ReaderRolling:onSetDimensions(dimen)
         -- uses it to reposition after resize
         self.ui.document:enableInternalHistory(true)
         -- Set document dimensions
-        self.ui.document:setViewDimen(Screen:getSize())
+        self.ui.document:setViewDimen(getReaderUsableScreenSize())
         -- Re-render document (and update TOC, re set position)
         self:onUpdatePos()
         -- Re-disable internal history, with required redraw
@@ -1125,11 +1152,11 @@ function ReaderRolling:_gotoPos(new_pos, do_dim_area)
     if new_pos < 0 then new_pos = 0 end
     -- Don't go past end of document, and ensure last line of the document
     -- is shown just above the footer, whether footer is visible or not
-    local max_pos = self.ui.document.info.doc_height - self.ui.dimen.h + self.view.footer:getHeight()
+    local max_pos = self.ui.document.info.doc_height - self.ui.dimen.h + self.view.footer:getReservedHeight()
     if new_pos > max_pos then new_pos = max_pos end
     -- adjust dim_area according to new_pos
     if self.view.view_mode ~= "page" and self.view.page_overlap_enable and do_dim_area then
-        local footer_height = ((self.view.footer_visible and not self.view.footer.settings.reclaim_height) and 1 or 0) * self.view.footer:getHeight()
+        local footer_height = ((self.view.footer_visible and not self.view.footer.settings.reclaim_height) and 1 or 0) * self.view.footer:getReservedHeight()
         local page_visible_height = self.ui.dimen.h - footer_height
         local panned_step = new_pos - self.current_pos
         self.view.dim_area.x = 0
@@ -1893,6 +1920,11 @@ function ReaderRolling:tearDownRerenderingAutomation()
 end
 
 function ReaderRolling:_rerenderInBackground()
+    if not canBackgroundRerender() then
+        logger.info("CRE background rerendering skipped: unsupported on this device")
+        return false
+    end
+
     Device:enableCPUCores(2)
 
     -- Set up mmap segment to exchange signals between main and sub processes

@@ -60,11 +60,12 @@ end
 local function getMenuTable(plugin)
     local t = {}
     t.name = plugin.name
+    t.plugin_key = plugin.plugin_key or plugin.name
     t.fullname = string.format("%s%s", plugin.fullname or plugin.name,
         plugin.deprecated and " (" .. _("outdated") .. ")" or "")
 
     local deprecated, message = deprecationFmt(plugin.deprecated)
-    t.description = string.format("%s%s", plugin.description,
+    t.description = string.format("%s%s", plugin.description or "",
         deprecated and "\n\n" .. message or "")
     return t
 end
@@ -123,6 +124,7 @@ local PluginLoader = {
     enabled_plugins = nil,
     disabled_plugins = nil,
     loaded_plugins = nil,
+    loaded_plugin_info = nil,
     all_plugins = nil,
 }
 
@@ -140,7 +142,7 @@ function PluginLoader:_discover()
             extra_paths = { extra_paths }
         end
         if type(extra_paths) == "table" then
-            for _,extra_path in ipairs(extra_paths) do
+            for __, extra_path in ipairs(extra_paths) do
                 local extra_path_mode = lfs.attributes(extra_path, "mode")
                 if extra_path_mode == "directory" and extra_path ~= DEFAULT_PLUGIN_PATH then
                     table.insert(lookup_path_list, extra_path)
@@ -157,7 +159,7 @@ function PluginLoader:_discover()
             table.insert(lookup_path_list, extra_path)
         end
     end
-    for _, lookup_path in ipairs(lookup_path_list) do
+    for __, lookup_path in ipairs(lookup_path_list) do
         logger.info("Looking for plugins in directory:", lookup_path)
         for entry in lfs.dir(lookup_path) do
             local plugin_root = lookup_path.."/"..entry
@@ -167,7 +169,8 @@ function PluginLoader:_discover()
                 local mainfile = plugin_root.."/main.lua"
                 local metafile = plugin_root.."/_meta.lua"
                 local disabled = false
-                if plugins_disabled and plugins_disabled[entry:sub(1, -10)] then
+                local plugin_key = entry:sub(1, -10)
+                if plugins_disabled and plugins_disabled[plugin_key] then
                     mainfile = metafile
                     disabled = true
                 end
@@ -179,6 +182,7 @@ function PluginLoader:_discover()
                     ["path"] = plugin_root,
                     ["disabled"] = disabled,
                     ["name"] = name,
+                    ["plugin_key"] = plugin_key,
                 })
             end
         end
@@ -192,7 +196,7 @@ function PluginLoader:_load(t)
     local package_cpath = package.cpath
 
     local mainfile, metafile, plugin_root, disabled
-    for _, v in ipairs(t) do
+    for __, v in ipairs(t) do
         mainfile = v.main
         metafile = v.meta
         plugin_root = v.path
@@ -200,11 +204,20 @@ function PluginLoader:_load(t)
         package.path = string.format("%s/?.lua;%s", plugin_root, package_path)
         package.cpath = string.format("%s/lib/?.so;%s", plugin_root, package_cpath)
         local ok, plugin_module = pcall(dofile, mainfile)
+        if not ok and disabled then
+            plugin_module = {
+                name = v.plugin_key,
+                fullname = v.plugin_key,
+                description = "",
+            }
+            ok = true
+        end
         if not ok or not plugin_module then
             logger.warn("Error when loading", mainfile, plugin_module)
         elseif type(plugin_module.disabled) ~= "boolean" or not plugin_module.disabled then
             plugin_module.path = plugin_root
-            plugin_module.name = plugin_module.name or plugin_root:match("/(.-)%.koplugin")
+            plugin_module.name = plugin_module.name or v.plugin_key
+            plugin_module.plugin_key = v.plugin_key or plugin_module.name
             if disabled then
                 table.insert(self.disabled_plugins, plugin_module)
             else
@@ -229,15 +242,27 @@ end
 function PluginLoader:loadPlugins()
     if self.enabled_plugins then return self.enabled_plugins, self.disabled_plugins end
 
+    local has_loaded_plugins = type(self.loaded_plugins) == "table" and next(self.loaded_plugins) ~= nil
+    local ok_device, Device = pcall(require, "device")
+    if not has_loaded_plugins and ok_device and Device:isIOS() then
+        local ok_ppm, plugin_package_manager = pcall(require, "pluginpackagemanager")
+        if ok_ppm and plugin_package_manager.cleanupPendingRemovals then
+            plugin_package_manager:cleanupPendingRemovals()
+        else
+            logger.warn("Could not run iOS pending plugin removals:", plugin_package_manager)
+        end
+    end
+
     self.enabled_plugins = {}
     self.disabled_plugins = {}
-    self.loaded_plugins = {}
+    self.loaded_plugins = self.loaded_plugins or {}
+    self.loaded_plugin_info = self.loaded_plugin_info or {}
 
     local t = self:_discover()
     table.sort(t, sortProvidersFirst)
     self:_load(t)
     -- set package path for all loaded plugins
-    for _, plugin in ipairs(self.enabled_plugins) do
+    for __, plugin in ipairs(self.enabled_plugins) do
         package.path = string.format("%s;%s/?.lua", package.path, plugin.path)
         package.cpath = string.format("%s;%s/lib/?.so", package.cpath, plugin.path)
     end
@@ -252,13 +277,13 @@ function PluginLoader:genPluginManagerSubItem()
         local enabled_plugins, disabled_plugins = self:loadPlugins()
         self.all_plugins = {}
 
-        for _, plugin in ipairs(enabled_plugins) do
+        for __, plugin in ipairs(enabled_plugins) do
             local element = getMenuTable(plugin)
             element.enable = true
             table.insert(self.all_plugins, element)
         end
 
-        for _, plugin in ipairs(disabled_plugins) do
+        for __, plugin in ipairs(disabled_plugins) do
             local element = getMenuTable(plugin)
             element.enable = false
             table.insert(self.all_plugins, element)
@@ -267,7 +292,16 @@ function PluginLoader:genPluginManagerSubItem()
         table.sort(self.all_plugins, function(v1, v2) return v1.fullname < v2.fullname end)
     end
 
-    local plugin_table = require("pluginpackagemanager"):genIOSMenuItems()
+    local plugin_table = {}
+    local Device = require("device")
+    if Device:isIOS() then
+        local ok, plugin_package_manager = pcall(require, "pluginpackagemanager")
+        if ok then
+            plugin_table = plugin_package_manager:genIOSMenuItems()
+        else
+            logger.warn("Could not load iOS plugin package manager:", plugin_package_manager)
+        end
+    end
     for __, plugin in ipairs(self.all_plugins) do
         table.insert(plugin_table, {
             text = plugin.fullname,
@@ -277,11 +311,12 @@ function PluginLoader:genPluginManagerSubItem()
             callback = function()
                 local UIManager = require("ui/uimanager")
                 local plugins_disabled = G_reader_settings:readSetting("plugins_disabled") or {}
+                local plugin_key = plugin.plugin_key or plugin.name
                 plugin.enable = not plugin.enable
                 if plugin.enable then
-                    plugins_disabled[plugin.name] = nil
+                    plugins_disabled[plugin_key] = nil
                 else
-                    plugins_disabled[plugin.name] = true
+                    plugins_disabled[plugin_key] = true
                     local instance = self:getPluginInstance(plugin.name)
                     local stopPluginFn = instance and instance.stopPlugin
                     if type(stopPluginFn) == "function" then
@@ -310,7 +345,14 @@ end
 function PluginLoader:createPluginInstance(plugin, attr)
     local ok, re = pcall(plugin.new, plugin, attr)
     if ok then  -- re is a plugin instance
+        self.loaded_plugins = self.loaded_plugins or {}
+        self.loaded_plugin_info = self.loaded_plugin_info or {}
         self.loaded_plugins[plugin.name] = re
+        self.loaded_plugin_info[plugin.name] = {
+            name = plugin.name,
+            path = plugin.path,
+            plugin_key = plugin.plugin_key or plugin.name,
+        }
         return ok, re
     else  -- re is the error message
         logger.err("Failed to initialize", plugin.name, "plugin:", re)
@@ -348,6 +390,7 @@ end
 function PluginLoader:finalize()
     -- Unpin stale references
     self.loaded_plugins = {}
+    self.loaded_plugin_info = {}
 end
 
 return PluginLoader

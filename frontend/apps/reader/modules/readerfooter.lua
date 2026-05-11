@@ -31,6 +31,8 @@ local T = require("ffi/util").template
 local _ = require("gettext")
 local C_ = _.pgettext
 local Screen = Device.screen
+local IOS_FOOTER_SIDE_INSET_RATIO = 0.075
+local IOS_FOOTER_BOTTOM_INSET_RATIO = 0.25
 
 local MODE = {
     off = 0,
@@ -412,13 +414,13 @@ footerTextGeneratorMap = {
         return footer.ui.bookinfo:expandString(footer.custom_text):rep(footer.custom_text_repetitions), merge
     end,
     dynamic_filler = function(footer)
-        local margin = footer.horizontal_margin
+        local margin = footer:getEffectiveHorizontalMargin(footer._saved_screen_width)
         if not footer.settings.disable_progress_bar then
             if footer.settings.progress_bar_position == "alongside" then
                 return
             end
             if footer.settings.align == "center" then
-                margin = Screen:scaleBySize(footer.settings.progress_margin_width)
+                margin = footer:getEffectiveProgressMargin(footer._saved_screen_width)
             end
         end
         local max_width = math.floor(footer._saved_screen_width - 2 * margin)
@@ -576,7 +578,8 @@ function ReaderFooter:init()
 
     -- Container settings
     self.height = Screen:scaleBySize(self.settings.container_height)
-    self.bottom_padding = Screen:scaleBySize(self.settings.container_bottom_padding)
+    self.top_padding = self:getEffectiveTopPadding()
+    self.bottom_padding = self:getEffectiveBottomPadding()
 
     self.mode_list = {}
     for i = 0, #self.mode_index do
@@ -654,6 +657,82 @@ function ReaderFooter:init()
     if self.ui.document.info.has_pages then -- self.ui.paging is not inited yet
         self.pages = self.ui.document:getPageCount()
     end
+end
+
+function ReaderFooter:getIOSBottomSafeAreaInset()
+    if Device:isIOS() and Device.getBottomSafeAreaInset then
+        return Device:getBottomSafeAreaInset()
+    end
+    return 0
+end
+
+function ReaderFooter:getIOSFooterSideInset(screen_width)
+    if self:getIOSBottomSafeAreaInset() <= 0 then
+        return 0
+    end
+    return math.floor((screen_width or Screen:getWidth()) * IOS_FOOTER_SIDE_INSET_RATIO)
+end
+
+function ReaderFooter:getEffectiveBottomPadding()
+    return Screen:scaleBySize(self.settings.container_bottom_padding)
+        + math.floor(self:getIOSBottomSafeAreaInset() * IOS_FOOTER_BOTTOM_INSET_RATIO)
+end
+
+function ReaderFooter:getEffectiveTopPadding()
+    if Device:isIOS() and self:getIOSBottomSafeAreaInset() > 0 then
+        return self:getEffectiveContainerHeight()
+    end
+    return 0
+end
+
+function ReaderFooter:getEffectiveHorizontalMargin(screen_width)
+    return math.max(self.horizontal_margin, self:getIOSFooterSideInset(screen_width))
+end
+
+function ReaderFooter:getEffectiveProgressMargin(screen_width)
+    return math.max(Screen:scaleBySize(self.settings.progress_margin_width),
+        self:getIOSFooterSideInset(screen_width))
+end
+
+function ReaderFooter:getEffectiveContainerHeight()
+    local content_height = self.height
+    if self.horizontal_group then
+        local ok, size = pcall(function() return self.horizontal_group:getSize() end)
+        if ok and size and size.h then
+            content_height = size.h
+        end
+    end
+    return math.max(self.height, content_height)
+end
+
+function ReaderFooter:updateFooterContainerHeight()
+    if not self.footer_container then
+        return false
+    end
+    local changed = false
+    local container_height = self:getEffectiveContainerHeight()
+    if self.footer_container.dimen.h ~= container_height then
+        self.footer_container.dimen.h = container_height
+        changed = true
+    end
+    local top_padding = self:getEffectiveTopPadding()
+    if self.top_padding ~= top_padding then
+        self.top_padding = top_padding
+        if self.footer_content then
+            self.footer_content.padding_top = top_padding
+        end
+        changed = true
+    end
+    if not changed then
+        return false
+    end
+    if self.vertical_frame then
+        self.vertical_frame:resetLayout()
+    end
+    if self.footer_content then
+        self.footer_content.dimen = nil
+    end
+    return true
 end
 
 function ReaderFooter:set_mode_index()
@@ -773,7 +852,7 @@ local option_help_text = {
 }
 
 function ReaderFooter:updateFooterContainer()
-    local margin_span = HorizontalSpan:new{ width = self.horizontal_margin }
+    local margin_span = HorizontalSpan:new{ width = self:getEffectiveHorizontalMargin() }
     self.vertical_frame = VerticalGroup:new{}
     if self.settings.bottom_horizontal_separator then
         self.separator_line = LineWidget:new{
@@ -803,17 +882,17 @@ function ReaderFooter:updateFooterContainer()
 
     if self.settings.align == "left" then
         self.footer_container = LeftContainer:new{
-            dimen = Geom:new{ w = 0, h = self.height },
+            dimen = Geom:new{ w = 0, h = self:getEffectiveContainerHeight() },
             self.horizontal_group
         }
     elseif self.settings.align == "right" then
         self.footer_container = RightContainer:new{
-            dimen = Geom:new{ w = 0, h = self.height },
+            dimen = Geom:new{ w = 0, h = self:getEffectiveContainerHeight() },
             self.horizontal_group
         }
     else
         self.footer_container = CenterContainer:new{
-            dimen = Geom:new{ w = 0, h = self.height },
+            dimen = Geom:new{ w = 0, h = self:getEffectiveContainerHeight() },
             self.horizontal_group
         }
     end
@@ -836,6 +915,7 @@ function ReaderFooter:updateFooterContainer()
         background = Blitbuffer.COLOR_WHITE,
         bordersize = 0,
         padding = 0,
+        padding_top = self.top_padding,
         padding_bottom = self.bottom_padding,
     }
 
@@ -954,20 +1034,37 @@ end
 function ReaderFooter:resetLayout(force_reset)
     local new_screen_width = Screen:getWidth()
     local new_screen_height = Screen:getHeight()
+    local new_top_padding = self:getEffectiveTopPadding()
+    local new_bottom_padding = self:getEffectiveBottomPadding()
+    local new_horizontal_margin = self:getEffectiveHorizontalMargin(new_screen_width)
+    local layout_changed = new_top_padding ~= self.top_padding
+        or new_bottom_padding ~= self.bottom_padding
+        or new_horizontal_margin ~= self._effective_horizontal_margin
     if new_screen_width == self._saved_screen_width
-        and new_screen_height == self._saved_screen_height and not force_reset then return end
+        and new_screen_height == self._saved_screen_height
+        and not layout_changed and not force_reset then return end
+
+    if layout_changed then
+        self.top_padding = new_top_padding
+        self.bottom_padding = new_bottom_padding
+        self._effective_horizontal_margin = new_horizontal_margin
+        self:updateFooterContainer()
+    end
+
+    local progress_margin = self:getEffectiveProgressMargin(new_screen_width)
+    local horizontal_margin = self:getEffectiveHorizontalMargin(new_screen_width)
 
     if self.settings.disable_progress_bar then
         self.progress_bar.width = 0
     elseif self.settings.progress_bar_position ~= "alongside" then
         self.progress_bar.width = math.floor(new_screen_width -
-            2 * Screen:scaleBySize(self.settings.progress_margin_width))
+            2 * progress_margin)
     else
         self.progress_bar.width = math.floor(new_screen_width -
-            2 * Screen:scaleBySize(self.settings.progress_margin_width) - self.text_width)
+            2 * progress_margin - self.text_width)
     end
     if self.separator_line then
-        self.separator_line.dimen.w = new_screen_width - 2 * self.horizontal_margin
+        self.separator_line.dimen.w = new_screen_width - 2 * horizontal_margin
     end
     if self.settings.disable_progress_bar then
         self.progress_bar.height = 0
@@ -982,6 +1079,7 @@ function ReaderFooter:resetLayout(force_reset)
     end
 
     self.horizontal_group:resetLayout()
+    local height_changed = self:updateFooterContainerHeight()
     self.footer_positioner.dimen.w = new_screen_width
     self.footer_positioner.dimen.h = new_screen_height
     self.footer_container.dimen.w = new_screen_width
@@ -989,6 +1087,8 @@ function ReaderFooter:resetLayout(force_reset)
 
     self._saved_screen_width = new_screen_width
     self._saved_screen_height = new_screen_height
+    self._effective_horizontal_margin = new_horizontal_margin
+    return height_changed
 end
 
 function ReaderFooter:getHeight()
@@ -999,6 +1099,10 @@ function ReaderFooter:getHeight()
     else
         return 0
     end
+end
+
+function ReaderFooter:getReservedHeight()
+    return math.max(0, self:getHeight() - self.top_padding)
 end
 
 function ReaderFooter:disableFooter()
@@ -1732,7 +1836,7 @@ With this feature enabled, the current page is factored in, resulting in the cou
                         keep_shown_on_apply = true,
                         callback = function(spin)
                             self.settings.container_bottom_padding = spin.value
-                            self.bottom_padding = Screen:scaleBySize(self.settings.container_bottom_padding)
+                            self.bottom_padding = self:getEffectiveBottomPadding()
                             self:refreshFooter(true, true)
                             if touchmenu_instance then touchmenu_instance:updateItems() end
                         end,
@@ -2248,6 +2352,8 @@ function ReaderFooter:_updateFooterText(force_repaint, full_repaint)
 
     local text = self:genFooterText() or ""
     self.footer_text:setText(text)
+    local horizontal_margin = self:getEffectiveHorizontalMargin(self._saved_screen_width)
+    local progress_margin = self:getEffectiveProgressMargin(self._saved_screen_width)
 
     if self.settings.disable_progress_bar then
         if self.has_no_mode or text == "" then
@@ -2255,14 +2361,14 @@ function ReaderFooter:_updateFooterText(force_repaint, full_repaint)
             self.footer_text.height = 0
         else
             -- No progress bar, we're only constrained to fit inside self.footer_container
-            self.footer_text:setMaxWidth(math.floor(self._saved_screen_width - 2 * self.horizontal_margin))
+            self.footer_text:setMaxWidth(math.floor(self._saved_screen_width - 2 * horizontal_margin))
             self.text_width = self.footer_text:getSize().w
             self.footer_text.height = self.footer_text:getSize().h
         end
         self.progress_bar.height = 0
         self.progress_bar.width = 0
     elseif self.settings.progress_bar_position ~= "alongside" then
-        local margins_width = 2 * Screen:scaleBySize(self.settings.progress_margin_width)
+        local margins_width = 2 * progress_margin
         if self.has_no_mode or text == "" then
             self.text_width = 0
             self.footer_text.height = 0
@@ -2272,14 +2378,14 @@ function ReaderFooter:_updateFooterText(force_repaint, full_repaint)
                 self.footer_text:setMaxWidth(math.floor(self._saved_screen_width - margins_width))
             else
                 -- Otherwise, we have to constrain ourselves to the container, or weird shit happens.
-                self.footer_text:setMaxWidth(math.floor(self._saved_screen_width - 2 * self.horizontal_margin))
+                self.footer_text:setMaxWidth(math.floor(self._saved_screen_width - 2 * horizontal_margin))
             end
             self.text_width = self.footer_text:getSize().w
             self.footer_text.height = self.footer_text:getSize().h
         end
         self.progress_bar.width = math.floor(self._saved_screen_width - margins_width)
     else
-        local margins_width = 2 * Screen:scaleBySize(self.settings.progress_margin_width)
+        local margins_width = 2 * progress_margin
         if self.has_no_mode or text == "" then
             self.text_width = 0
             self.footer_text.height = 0
@@ -2287,13 +2393,13 @@ function ReaderFooter:_updateFooterText(force_repaint, full_repaint)
             if self.settings.progress_bar_lock_width then -- Alongside text items, with fixed width setting.
                 local bar_width = (1/100 * self.settings.progress_bar_min_width_pct * self._saved_screen_width)
                 self.footer_text:setMaxWidth(math.floor(self._saved_screen_width - bar_width))
-                self.text_width = self._saved_screen_width - bar_width + self.horizontal_margin
+                self.text_width = self._saved_screen_width - bar_width + horizontal_margin
             else
                 -- Alongside text items (progress bar uses remaining space).
                 local text_max_available_ratio = (100 - self.settings.progress_bar_min_width_pct) * (1/100)
-                self.footer_text:setMaxWidth(math.floor(text_max_available_ratio * self._saved_screen_width - margins_width - self.horizontal_margin))
+                self.footer_text:setMaxWidth(math.floor(text_max_available_ratio * self._saved_screen_width - margins_width - horizontal_margin))
                 -- Add some spacing between the text and the bar
-                self.text_width = self.footer_text:getSize().w + self.horizontal_margin
+                self.text_width = self.footer_text:getSize().w + horizontal_margin
             end
             self.footer_text.height = self.footer_text:getSize().h
         end
@@ -2301,10 +2407,11 @@ function ReaderFooter:_updateFooterText(force_repaint, full_repaint)
     end
 
     if self.separator_line then
-        self.separator_line.dimen.w = self._saved_screen_width - 2 * self.horizontal_margin
+        self.separator_line.dimen.w = self._saved_screen_width - 2 * horizontal_margin
     end
     self.text_container.dimen.w = self.text_width
     self.horizontal_group:resetLayout()
+    local height_changed = self:updateFooterContainerHeight()
     -- NOTE: This is essentially preventing us from truly using "fast" for panning,
     --       since it'll get coalesced in the "fast" panning update, upgrading it to "ui".
     -- NOTE: That's assuming using "fast" for pans was a good idea, which, it turned out, not so much ;).
@@ -2328,7 +2435,7 @@ function ReaderFooter:_updateFooterText(force_repaint, full_repaint)
             refresh_dim.y = self._saved_screen_height - refresh_dim.h
         end
         -- If we're making the footer visible (or it already is), we don't need to repaint ReaderUI behind it
-        if self.view.footer_visible and not full_repaint then
+        if self.view.footer_visible and not full_repaint and not height_changed then
             -- Unfortunately, it's not a modal (we never show() it), so it's not in the window stack,
             -- instead, it's baked inside ReaderUI, so it gets slightly trickier...
             -- NOTE: self.view.footer -> self ;).

@@ -80,7 +80,7 @@ function FileManagerMenu:initGesListener()
 
     local DTAP_ZONE_MENU = G_defaults:readSetting("DTAP_ZONE_MENU")
     local DTAP_ZONE_MENU_EXT = G_defaults:readSetting("DTAP_ZONE_MENU_EXT")
-    self:registerTouchZones({
+    local zones = {
         {
             id = "filemanager_tap",
             ges = "tap",
@@ -127,7 +127,25 @@ function FileManagerMenu:initGesListener()
             },
             handler = function(ges) return self:onSwipeShowMenu(ges) end,
         },
-    })
+    }
+    if Device:isIOS() and Device.getTopSafeAreaInset then
+        local top_inset = Device:getTopSafeAreaInset()
+        if top_inset > 0 then
+            table.insert(zones, {
+                id = "filemanager_ios_unsafe_top_tap",
+                ges = "tap",
+                screen_zone = {
+                    ratio_x = 0, ratio_y = -top_inset / Screen:getHeight(),
+                    ratio_w = 1, ratio_h = top_inset / Screen:getHeight(),
+                },
+                overrides = {
+                    "filemanager_tap",
+                },
+                handler = function(ges) return self:onTapShowMenu(ges) end,
+            })
+        end
+    end
+    self:registerTouchZones(zones)
 end
 
 function FileManagerMenu:onOpenLastDoc()

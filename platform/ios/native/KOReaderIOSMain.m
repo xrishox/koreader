@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <math.h>
 
 #include "lua.h"
 #include "lauxlib.h"
@@ -26,6 +27,7 @@ static NSString *KOPluginZipError;
 
 static UIWindow *KOKeyWindow(void);
 static UIViewController *KORootViewController(void);
+static NSString *KOApplicationSupportPath(void);
 
 static void KOSetPluginZipResult(KOPluginZipImportStatus status, NSString *path, NSString *error) {
     @synchronized (NSProcessInfo.processInfo) {
@@ -35,12 +37,34 @@ static void KOSetPluginZipResult(KOPluginZipImportStatus status, NSString *path,
     }
 }
 
+static BOOL KOPluginZipImportIsPending(void) {
+    @synchronized (NSProcessInfo.processInfo) {
+        return KOPluginZipStatus == KOPluginZipImportStatusPending;
+    }
+}
+
 static NSString *KOPathForDirectory(NSSearchPathDirectory directory) {
     NSArray<NSString *> *paths = NSSearchPathForDirectoriesInDomains(directory, NSUserDomainMask, YES);
     return paths.count > 0 ? paths.firstObject : NSHomeDirectory();
 }
 
+static NSString *KOApplicationSupportPath(void) {
+    NSString *path = [KOPathForDirectory(NSApplicationSupportDirectory) stringByAppendingPathComponent:@"KOReader"];
+    [NSFileManager.defaultManager createDirectoryAtPath:path
+                            withIntermediateDirectories:YES
+                                             attributes:nil
+                                                  error:nil];
+    return path;
+}
+
+static NSString *KOStringFromUTF8(const char *value) {
+    if (value == NULL) return @"";
+    NSString *string = [NSString stringWithUTF8String:value];
+    return string ?: @"";
+}
+
 static const char *KORetainUTF8(NSString *string) {
+    if (string == nil) string = @"";
     static NSMutableArray<NSString *> *retained;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
@@ -49,6 +73,9 @@ static const char *KORetainUTF8(NSString *string) {
     NSString *copy = [string copy];
     @synchronized (retained) {
         [retained addObject:copy];
+        if (retained.count > 64) {
+            [retained removeObjectsInRange:NSMakeRange(0, retained.count - 64)];
+        }
     }
     return copy.UTF8String;
 }
@@ -66,12 +93,7 @@ const char *KOIOSGetDocumentsPath(void) {
 }
 
 const char *KOIOSGetApplicationSupportPath(void) {
-    NSString *path = [KOPathForDirectory(NSApplicationSupportDirectory) stringByAppendingPathComponent:@"KOReader"];
-    [NSFileManager.defaultManager createDirectoryAtPath:path
-                            withIntermediateDirectories:YES
-                                             attributes:nil
-                                                  error:nil];
-    return KORetainUTF8(path);
+    return KORetainUTF8(KOApplicationSupportPath());
 }
 
 const char *KOIOSGetNativeLibraryDir(void) {
@@ -83,8 +105,8 @@ void KOIOSGetSafeAreaInsets(int *top, int *right, int *bottom, int *left) {
     __block CGFloat scale = UIScreen.mainScreen.scale;
     void (^readInsets)(void) = ^{
         UIWindow *window = KOKeyWindow();
-        UIView *view = window.rootViewController.view;
         if (window != nil) {
+            UIView *view = window.rootViewController.view;
             [window layoutIfNeeded];
             scale = window.screen.scale ?: UIScreen.mainScreen.scale;
             CGRect bounds = window.bounds;
@@ -122,7 +144,9 @@ void KOIOSGetSafeAreaInsets(int *top, int *right, int *bottom, int *left) {
 
 int KOIOSOpenLink(const char *url) {
     if (url == NULL) return 0;
-    NSURL *nsurl = [NSURL URLWithString:[NSString stringWithUTF8String:url]];
+    NSString *string = KOStringFromUTF8(url);
+    if (string.length == 0) return 0;
+    NSURL *nsurl = [NSURL URLWithString:string];
     if (nsurl == nil) return 0;
     dispatch_async(dispatch_get_main_queue(), ^{
         [UIApplication.sharedApplication openURL:nsurl options:@{} completionHandler:nil];
@@ -131,15 +155,41 @@ int KOIOSOpenLink(const char *url) {
 }
 
 int KOIOSHasClipboardText(void) {
-    return UIPasteboard.generalPasteboard.string.length > 0;
+    __block BOOL hasText = NO;
+    void (^readClipboard)(void) = ^{
+        hasText = UIPasteboard.generalPasteboard.string.length > 0;
+    };
+    if (NSThread.isMainThread) {
+        readClipboard();
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), readClipboard);
+    }
+    return hasText ? 1 : 0;
 }
 
 const char *KOIOSGetClipboardText(void) {
-    return KORetainUTF8(UIPasteboard.generalPasteboard.string ?: @"");
+    __block NSString *text = @"";
+    void (^readClipboard)(void) = ^{
+        text = [UIPasteboard.generalPasteboard.string ?: @"" copy];
+    };
+    if (NSThread.isMainThread) {
+        readClipboard();
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), readClipboard);
+    }
+    return KORetainUTF8(text);
 }
 
 int KOIOSSetClipboardText(const char *text) {
-    UIPasteboard.generalPasteboard.string = text ? [NSString stringWithUTF8String:text] : @"";
+    NSString *string = KOStringFromUTF8(text);
+    void (^writeClipboard)(void) = ^{
+        UIPasteboard.generalPasteboard.string = string;
+    };
+    if (NSThread.isMainThread) {
+        writeClipboard();
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), writeClipboard);
+    }
     return 1;
 }
 
@@ -216,22 +266,35 @@ int KOIOSShareText(const char *text, const char *reason, const char *title, cons
     (void)title;
     (void)mimetype;
     if (text == NULL) return 0;
-    NSString *string = [NSString stringWithUTF8String:text];
+    NSString *string = KOStringFromUTF8(text);
     dispatch_async(dispatch_get_main_queue(), ^{
         UIViewController *root = KORootViewController();
         if (root == nil) return;
         UIActivityViewController *controller = [[UIActivityViewController alloc] initWithActivityItems:@[string] applicationActivities:nil];
+        UIPopoverPresentationController *popover = controller.popoverPresentationController;
+        if (popover != nil) {
+            popover.sourceView = root.view;
+            popover.sourceRect = root.view.bounds;
+            popover.permittedArrowDirections = 0;
+        }
         [root presentViewController:controller animated:YES completion:nil];
     });
     return 1;
 }
 
 int KOIOSRequestPluginZipImport(void) {
+    if (KOPluginZipImportIsPending()) {
+        return 0;
+    }
     KOSetPluginZipResult(KOPluginZipImportStatusPending, nil, nil);
     dispatch_async(dispatch_get_main_queue(), ^{
         UIViewController *root = KORootViewController();
         if (root == nil) {
             KOSetPluginZipResult(KOPluginZipImportStatusFailed, nil, @"No active iOS window.");
+            return;
+        }
+        if (root.presentedViewController != nil) {
+            KOSetPluginZipResult(KOPluginZipImportStatusFailed, nil, @"Another iOS dialog is already open.");
             return;
         }
         if (KOPluginZipPicker == nil) {
@@ -263,6 +326,10 @@ const char *KOIOSGetPluginZipImportError(void) {
     }
 }
 
+void KOIOSConsumePluginZipImportResult(void) {
+    KOSetPluginZipResult(KOPluginZipImportStatusIdle, nil, nil);
+}
+
 static void KOSetEnv(NSString *name, NSString *value) {
     setenv(name.UTF8String, value.UTF8String, 1);
 }
@@ -275,7 +342,7 @@ static int KORunLua(void) {
     KOSetEnv(@"KO_IOS_BUNDLE_PATH", NSBundle.mainBundle.bundlePath);
     KOSetEnv(@"KO_IOS_RESOURCE_PATH", resourcePath);
     KOSetEnv(@"KO_IOS_DOCUMENTS_PATH", KOPathForDirectory(NSDocumentDirectory));
-    KOSetEnv(@"KO_IOS_APPLICATION_SUPPORT_PATH", KOPathForDirectory(NSApplicationSupportDirectory));
+    KOSetEnv(@"KO_IOS_APPLICATION_SUPPORT_PATH", KOApplicationSupportPath());
     KOSetEnv(@"KO_IOS_NATIVE_LIBRARY_DIR", [koreaderPath stringByAppendingPathComponent:@"libs"]);
 
     if (chdir(koreaderPath.fileSystemRepresentation) != 0) {

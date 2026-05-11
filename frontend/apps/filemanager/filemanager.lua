@@ -60,6 +60,90 @@ local function isFile(file)
     return lfs.attributes(file, "mode") == "file"
 end
 
+local function copyFileForIOS(from, to)
+    local err = ffiUtil.copyFile(from, to)
+    if err then
+        return nil, err
+    end
+    return true
+end
+
+local function resolveFileCommandDestination(from, to)
+    if lfs.attributes(to, "mode") == "directory" then
+        return ffiUtil.joinPath(to, ffiUtil.basename(from))
+    end
+    return to
+end
+
+local function normalizePathForContainment(path)
+    local real_path = ffiUtil.realpath(path)
+    if real_path then
+        return real_path:gsub("/+$", "")
+    end
+
+    local missing_parts = {}
+    local current_path = path
+    while current_path and current_path ~= "" do
+        real_path = ffiUtil.realpath(current_path)
+        if real_path then
+            for i = #missing_parts, 1, -1 do
+                real_path = ffiUtil.joinPath(real_path, missing_parts[i])
+            end
+            return real_path:gsub("/+$", "")
+        end
+
+        local parent = ffiUtil.dirname(current_path)
+        if parent == current_path then
+            break
+        end
+        table.insert(missing_parts, ffiUtil.basename(current_path))
+        current_path = parent
+    end
+    return path:gsub("/+$", "")
+end
+
+local function isPathInsidePath(path, parent)
+    if parent == "/" then
+        return path:sub(1, 1) == "/"
+    end
+    return path == parent or path:sub(1, #parent + 1) == parent .. "/"
+end
+
+local function copyRecursiveForIOS(from, to)
+    to = resolveFileCommandDestination(from, to)
+    local link_mode = lfs.symlinkattributes and lfs.symlinkattributes(from, "mode")
+    if link_mode == "link" then
+        return nil, _("Cannot copy symbolic links on iOS.")
+    end
+
+    local mode = lfs.attributes(from, "mode")
+    if mode == "file" then
+        return copyFileForIOS(from, to)
+    elseif mode ~= "directory" then
+        return nil, T(_("Unsupported file type: %1"), mode or _("unknown"))
+    end
+
+    local source_path = normalizePathForContainment(from)
+    local destination_path = normalizePathForContainment(to)
+    if isPathInsidePath(destination_path, source_path) then
+        return nil, _("Cannot copy a folder into itself.")
+    end
+
+    local ok, err = util.makePath(to)
+    if not ok then
+        return nil, err
+    end
+    for entry in lfs.dir(from) do
+        if entry ~= "." and entry ~= ".." then
+            ok, err = copyRecursiveForIOS(from .. "/" .. entry, to .. "/" .. entry)
+            if not ok then
+                return nil, err
+            end
+        end
+    end
+    return true
+end
+
 function FileManager:setRotationMode()
     local locked = G_reader_settings:isTrue("lock_rotation")
     if not locked then
@@ -1300,18 +1384,41 @@ end
 --- A shortcut to execute mv.
 -- @treturn boolean result of mv command
 function FileManager:moveFile(from, to)
+    if Device:isIOS() then
+        local target = resolveFileCommandDestination(from, to)
+        local ok, err = os.rename(from, target)
+        if not ok then
+            logger.warn("iOS file move failed:", from, target, err)
+        end
+        return ok == true
+    end
     return ffiUtil.execute(self.mv_bin, from, to) == 0
 end
 
 --- A shortcut to execute cp.
 -- @treturn boolean result of cp command
 function FileManager:copyFileFromTo(from, to)
+    if Device:isIOS() then
+        local target = resolveFileCommandDestination(from, to)
+        local ok, err = copyFileForIOS(from, target)
+        if not ok then
+            logger.warn("iOS file copy failed:", from, target, err)
+        end
+        return ok == true
+    end
     return ffiUtil.execute(self.cp_bin, from, to) == 0
 end
 
 --- A shortcut to execute cp recursively.
 -- @treturn boolean result of cp command
 function FileManager:copyRecursive(from, to)
+    if Device:isIOS() then
+        local ok, err = copyRecursiveForIOS(from, to)
+        if not ok then
+            logger.warn("iOS recursive copy failed:", from, to, err)
+        end
+        return ok == true
+    end
     return ffiUtil.execute(self.cp_bin, "-r", from, to ) == 0
 end
 

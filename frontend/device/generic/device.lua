@@ -83,6 +83,8 @@ local Device = {
     canRestart = yes,
     canSuspend = no,
     canStandby = no,
+    canBackgroundRerender = yes,
+    canRunInSubProcess = yes,
     canPowerSaveWhileCharging = no,
     total_standby_time = 0, -- total time spent in standby
     last_standby_time = 0,
@@ -101,6 +103,7 @@ local Device = {
     -- device/<devicetype>/device.lua file
     -- (these are functions!)
     isAndroid = no,
+    isIOS = no,
     isCervantes = no,
     isKindle = no,
     isKobo = no,

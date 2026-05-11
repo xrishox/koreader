@@ -72,6 +72,13 @@ local Input = Device.input
 local Screen = Device.screen
 local T = ffiUtil.template
 
+local function getReaderUsableScreenSize()
+    if Device.getReaderUsableScreenSize then
+        return Device:getReaderUsableScreenSize()
+    end
+    return Screen:getSize()
+end
+
 local ReaderUI = InputContainer:extend{
     name = "ReaderUI",
     active_widgets = nil, -- array
@@ -724,7 +731,7 @@ function ReaderUI:doShowReader(file, provider, seamless)
         end
     end
     local reader = ReaderUI:new{
-        dimen = Screen:getSize(),
+        dimen = getReaderUsableScreenSize(),
         covers_fullscreen = true, -- hint for UIManager:_repaint()
         document = document,
         reloading = self.reloading,
