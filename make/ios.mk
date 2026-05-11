@@ -24,10 +24,6 @@ endef
 
 update: all
 	rm -rf $(IOS_APP) $(INSTALL_DIR)/Payload
-	rm -rf $(INSTALL_DIR)/koreader/fonts
-	install -d $(INSTALL_DIR)/koreader/fonts
-	cp -R resources/fonts/* $(INSTALL_DIR)/koreader/fonts/
-	install -d $(INSTALL_DIR)/koreader/fonts/host
 	cmake -S $(IOS_DIR)/native -B $(IOS_NATIVE_BUILD) -G Ninja \
 		-DCMAKE_SYSTEM_NAME=iOS \
 		-DCMAKE_OSX_SYSROOT=$(IOS_SDK) \

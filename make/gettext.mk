@@ -14,9 +14,7 @@ MO_FILES = $(PO_FILES:%.po=%.mo)
 	@$(MSGFMT_BIN) --no-hash -o $@ $<
 
 mo:
-ifneq ($(MO_FILES),)
 	$(MAKE) $(if $(PARALLEL_JOBS),--jobs=$(PARALLEL_JOBS)) $(if $(PARALLEL_LOAD),--load-average=$(PARALLEL_LOAD)) --silent --file=$(SELF) $(MO_FILES)
-endif
 
 mo-clean:
 	rm -f $(MO_FILES)

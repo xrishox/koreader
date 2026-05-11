@@ -710,13 +710,13 @@ function BookInfoManager:extractInBackground(files)
         logger.dbg("  BG extraction done")
     end
 
-    if Device:isIOS() then
-        logger.info("Running book info extraction in foreground on iOS")
+    if Device.canRunInSubProcess and not Device:canRunInSubProcess() then
+        logger.info("Running book info extraction in foreground: subprocesses are unsupported on this device")
         self.cleanup_needed = true
         local ok, err = xpcall(task, debug.traceback)
         self:cleanUp()
         if not ok then
-            logger.warn("Foreground book info extraction failed on iOS:", err)
+            logger.warn("Foreground book info extraction failed:", err)
         end
         return true
     end

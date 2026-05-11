@@ -339,10 +339,11 @@ local function findLoadedPlugin(plugin_name, plugin_path)
         return nil
     end
 
-    for __, key in ipairs(getLoadedPluginKeys(plugin_name, plugin_path, PluginLoader)) do
+    local keys = getLoadedPluginKeys(plugin_name, plugin_path, PluginLoader)
+    for __, key in ipairs(keys) do
         local instance = PluginLoader:getPluginInstance(key)
         if instance then
-            return key, instance
+            return key, instance, keys
         end
     end
 end
@@ -360,6 +361,15 @@ local function markPluginPendingRemoval(plugin_name)
     pending[plugin_name] = true
     G_reader_settings:saveSetting(PENDING_REMOVAL_SETTING, pending)
     G_reader_settings:flush()
+end
+
+local function clearPluginPendingRemoval(plugin_name)
+    local pending = getPendingRemovals()
+    if pending[plugin_name] then
+        pending[plugin_name] = nil
+        G_reader_settings:saveSetting(PENDING_REMOVAL_SETTING, pending)
+        G_reader_settings:flush()
+    end
 end
 
 function PluginPackageManager:installZip(zip_path, opts)
@@ -472,6 +482,7 @@ function PluginPackageManager:installZip(zip_path, opts)
         table.insert(disabled_keys, key)
     end
     clearPluginDisabledKeys(disabled_keys)
+    clearPluginPendingRemoval(plan.plugin_name)
     self:resetPluginLoaderCache()
 
     return true, plan
@@ -488,8 +499,9 @@ function PluginPackageManager:removeUserPlugin(plugin_name, opts)
         return nil, _("Plugin is not installed in the user plugin folder.")
     end
     local disabled_keys = getPluginDisabledKeys(plugin_name, plugin_path)
-    if findLoadedPlugin(plugin_name, plugin_path) then
-        setPluginDisabledKeys(disabled_keys)
+    local __, loaded_plugin, loaded_keys = findLoadedPlugin(plugin_name, plugin_path)
+    if loaded_plugin then
+        setPluginDisabledKeys(loaded_keys or disabled_keys)
         markPluginPendingRemoval(plugin_name)
         self:resetPluginLoaderCache()
         return nil, T(_("Plugin %1 is currently active and will be removed after restarting KOReader."), plugin_name), "restart_required"

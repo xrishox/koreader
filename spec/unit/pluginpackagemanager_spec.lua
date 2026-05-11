@@ -181,6 +181,27 @@ describe("PluginPackageManager", function()
         assert.is_nil(G_reader_settings:readSetting("plugins_disabled")["new_internal_name"])
     end)
 
+    it("clears pending removal when a plugin is reinstalled before restart", function()
+        local plugin_dir = path("plugins")
+        local plugin_path = plugin_dir .. "/replace.koplugin"
+        assert.is_true(util.makePath(plugin_path))
+        local fp = assert(io.open(plugin_path .. "/main.lua", "w"))
+        fp:write("return { name = 'old_internal_name' }")
+        fp:close()
+        G_reader_settings:saveSetting("plugins_pending_removal", {
+            ["replace.koplugin"] = true,
+        })
+        local zip_path = makeZip("replace.zip", {
+            ["main.lua"] = "return { name = 'new_internal_name' }",
+        })
+
+        local ok = PluginPackageManager:installZip(zip_path, { plugin_dir = plugin_dir, replace = true })
+
+        assert.is_true(ok)
+        assert.are.equal("file", lfs.attributes(plugin_path .. "/main.lua", "mode"))
+        assert.is_nil(G_reader_settings:readSetting("plugins_pending_removal")["replace.koplugin"])
+    end)
+
     it("rejects archives with multiple .koplugin roots", function()
         local zip_path = makeZip("multi.zip", {
             ["one.koplugin/main.lua"] = "return {}",
@@ -416,6 +437,7 @@ describe("PluginPackageManager", function()
         assert.truthy(err:match("currently active"))
         assert.are.equal("restart_required", status)
         assert.are.equal("directory", lfs.attributes(plugin_path, "mode"))
+        assert.is_true(G_reader_settings:readSetting("plugins_disabled")["loader_internal_name"])
     end)
 
     it("cleans pending plugin removals on startup", function()

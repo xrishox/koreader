@@ -142,7 +142,7 @@ function PluginLoader:_discover()
             extra_paths = { extra_paths }
         end
         if type(extra_paths) == "table" then
-            for __, extra_path in ipairs(extra_paths) do
+            for _, extra_path in ipairs(extra_paths) do
                 local extra_path_mode = lfs.attributes(extra_path, "mode")
                 if extra_path_mode == "directory" and extra_path ~= DEFAULT_PLUGIN_PATH then
                     table.insert(lookup_path_list, extra_path)
@@ -159,7 +159,7 @@ function PluginLoader:_discover()
             table.insert(lookup_path_list, extra_path)
         end
     end
-    for __, lookup_path in ipairs(lookup_path_list) do
+    for _, lookup_path in ipairs(lookup_path_list) do
         logger.info("Looking for plugins in directory:", lookup_path)
         for entry in lfs.dir(lookup_path) do
             local plugin_root = lookup_path.."/"..entry
@@ -196,7 +196,7 @@ function PluginLoader:_load(t)
     local package_cpath = package.cpath
 
     local mainfile, metafile, plugin_root, disabled
-    for __, v in ipairs(t) do
+    for _, v in ipairs(t) do
         mainfile = v.main
         metafile = v.meta
         plugin_root = v.path
@@ -262,7 +262,7 @@ function PluginLoader:loadPlugins()
     table.sort(t, sortProvidersFirst)
     self:_load(t)
     -- set package path for all loaded plugins
-    for __, plugin in ipairs(self.enabled_plugins) do
+    for _, plugin in ipairs(self.enabled_plugins) do
         package.path = string.format("%s;%s/?.lua", package.path, plugin.path)
         package.cpath = string.format("%s;%s/lib/?.so", package.cpath, plugin.path)
     end
@@ -277,13 +277,13 @@ function PluginLoader:genPluginManagerSubItem()
         local enabled_plugins, disabled_plugins = self:loadPlugins()
         self.all_plugins = {}
 
-        for __, plugin in ipairs(enabled_plugins) do
+        for _, plugin in ipairs(enabled_plugins) do
             local element = getMenuTable(plugin)
             element.enable = true
             table.insert(self.all_plugins, element)
         end
 
-        for __, plugin in ipairs(disabled_plugins) do
+        for _, plugin in ipairs(disabled_plugins) do
             local element = getMenuTable(plugin)
             element.enable = false
             table.insert(self.all_plugins, element)
