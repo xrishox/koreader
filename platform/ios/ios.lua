@@ -80,12 +80,17 @@ function ios.getSafeAreaInsets()
     local right = ffi.new("int[1]", 0)
     local bottom = ffi.new("int[1]", 0)
     local left = ffi.new("int[1]", 0)
-    ffi.C.KOIOSGetSafeAreaInsets(top, right, bottom, left)
+    local ok = pcall(function()
+        ffi.C.KOIOSGetSafeAreaInsets(top, right, bottom, left)
+    end)
+    if not ok then
+        return { top = 0, right = 0, bottom = 0, left = 0 }
+    end
     return {
-        top = tonumber(top[0]),
-        right = tonumber(right[0]),
-        bottom = tonumber(bottom[0]),
-        left = tonumber(left[0]),
+        top = tonumber(top[0]) or 0,
+        right = tonumber(right[0]) or 0,
+        bottom = tonumber(bottom[0]) or 0,
+        left = tonumber(left[0]) or 0,
     }
 end
 
@@ -123,11 +128,20 @@ function ios.getPluginZipImportResult()
     if not ffi_ok then
         return "failed", "iOS bridge is not available"
     end
-    local status = tonumber(ffi.C.KOIOSGetPluginZipImportStatus())
+    local ok, status = pcall(function()
+        return tonumber(ffi.C.KOIOSGetPluginZipImportStatus())
+    end)
+    if not ok then
+        return "failed", "iOS bridge is not available"
+    end
     if status == 1 then
         return "pending"
     elseif status == 2 then
-        return "ok", cstring(function() return ffi.C.KOIOSGetPluginZipImportPath() end, "")
+        local path = cstring(function() return ffi.C.KOIOSGetPluginZipImportPath() end, "")
+        if path == "" then
+            return "failed", "No plugin ZIP path was returned"
+        end
+        return "ok", path
     elseif status == 3 then
         return "cancelled"
     elseif status == 4 then

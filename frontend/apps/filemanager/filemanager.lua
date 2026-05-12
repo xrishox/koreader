@@ -60,14 +60,6 @@ local function isFile(file)
     return lfs.attributes(file, "mode") == "file"
 end
 
-local function copyFileForIOS(from, to)
-    local err = ffiUtil.copyFile(from, to)
-    if err then
-        return nil, err
-    end
-    return true
-end
-
 local function resolveFileCommandDestination(from, to)
     if lfs.attributes(to, "mode") == "directory" then
         return ffiUtil.joinPath(to, ffiUtil.basename(from))
@@ -100,6 +92,44 @@ local function normalizePathForContainment(path)
         current_path = parent
     end
     return path:gsub("/+$", "")
+end
+
+local function makeCopyTempPath(to)
+    local dir = ffiUtil.dirname(to)
+    local basename = ffiUtil.basename(to)
+    for attempt = 1, 100 do
+        local temp_path = ffiUtil.joinPath(dir,
+            string.format(".%s.koreader-copy-%d-%d", basename, os.time(), attempt))
+        local link_mode = lfs.symlinkattributes and lfs.symlinkattributes(temp_path, "mode")
+        if link_mode == nil and lfs.attributes(temp_path, "mode") == nil then
+            return temp_path
+        end
+    end
+    return nil, _("Could not create a temporary copy path.")
+end
+
+local function copyFileForIOS(from, to)
+    if normalizePathForContainment(from) == normalizePathForContainment(to) then
+        return nil, _("Source and destination are the same file.")
+    end
+
+    local temp_path, err = makeCopyTempPath(to)
+    if not temp_path then
+        return nil, err
+    end
+
+    err = ffiUtil.copyFile(from, temp_path)
+    if err then
+        os.remove(temp_path)
+        return nil, err
+    end
+
+    local ok, rename_err = os.rename(temp_path, to)
+    if not ok then
+        os.remove(temp_path)
+        return nil, rename_err
+    end
+    return true
 end
 
 local function isPathInsidePath(path, parent)
@@ -1386,7 +1416,23 @@ end
 function FileManager:moveFile(from, to)
     if Device:isIOS() then
         local target = resolveFileCommandDestination(from, to)
-        local ok, err = os.rename(from, target)
+        local ok, err, errno = os.rename(from, target)
+        if not ok then
+            if errno == 18 or err and err:match("[Cc]ross%-device") then
+                local mode = lfs.attributes(from, "mode")
+                if mode == "file" then
+                    ok, err = copyFileForIOS(from, target)
+                    if ok then
+                        ok, err = os.remove(from)
+                    end
+                elseif mode == "directory" then
+                    ok, err = copyRecursiveForIOS(from, target)
+                    if ok then
+                        ok, err = ffiUtil.purgeDir(from)
+                    end
+                end
+            end
+        end
         if not ok then
             logger.warn("iOS file move failed:", from, target, err)
         end

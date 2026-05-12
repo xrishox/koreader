@@ -181,6 +181,41 @@ describe("PluginPackageManager", function()
         assert.is_nil(G_reader_settings:readSetting("plugins_disabled")["new_internal_name"])
     end)
 
+    it("restores the previous plugin when replacement activation fails", function()
+        local plugin_dir = path("plugins")
+        local plugin_path = plugin_dir .. "/replace.koplugin"
+        assert.is_true(util.makePath(plugin_path))
+        local fp = assert(io.open(plugin_path .. "/main.lua", "w"))
+        fp:write("return { version = 'old' }")
+        fp:close()
+        local zip_path = makeZip("replace.zip", {
+            ["main.lua"] = "return { version = 'new' }",
+        })
+        local old_rename = os.rename
+        os.rename = function(from, to)
+            if from == plugin_path .. ".installing" and to == plugin_path then
+                return nil, "simulated rename failure"
+            end
+            return old_rename(from, to)
+        end
+
+        local call_ok, ok, err = pcall(function()
+            return PluginPackageManager:installZip(zip_path, { plugin_dir = plugin_dir, replace = true })
+        end)
+        os.rename = old_rename
+
+        assert.is_true(call_ok, ok)
+        assert.is_nil(ok)
+        assert.truthy(err:match("simulated rename failure"))
+        assert.are.equal("file", lfs.attributes(plugin_path .. "/main.lua", "mode"))
+        assert.is_nil(lfs.attributes(plugin_path .. ".installing", "mode"))
+        assert.is_nil(lfs.attributes(plugin_path .. ".replacing", "mode"))
+        fp = assert(io.open(plugin_path .. "/main.lua", "r"))
+        local content = fp:read("*a")
+        fp:close()
+        assert.truthy(content:match("old"))
+    end)
+
     it("clears pending removal when a plugin is reinstalled before restart", function()
         local plugin_dir = path("plugins")
         local plugin_path = plugin_dir .. "/replace.koplugin"
@@ -358,7 +393,7 @@ describe("PluginPackageManager", function()
         assert.are.equal("directory", lfs.attributes(plugin_path, "mode"))
         assert.is_true(G_reader_settings:readSetting("plugins_disabled")["active-plugin"])
         assert.is_true(G_reader_settings:readSetting("plugins_disabled")["active_internal_name"])
-        assert.is_true(G_reader_settings:readSetting("plugins_pending_removal")["active-plugin.koplugin"])
+        assert.is_table(G_reader_settings:readSetting("plugins_pending_removal")["active-plugin.koplugin"])
     end)
 
     it("does not purge active user plugins without a stop hook", function()
@@ -380,7 +415,7 @@ describe("PluginPackageManager", function()
         assert.are.equal("directory", lfs.attributes(plugin_path, "mode"))
         assert.is_true(G_reader_settings:readSetting("plugins_disabled")["active-plugin"])
         assert.is_true(G_reader_settings:readSetting("plugins_disabled")["active_internal_name"])
-        assert.is_true(G_reader_settings:readSetting("plugins_pending_removal")["active-plugin.koplugin"])
+        assert.is_table(G_reader_settings:readSetting("plugins_pending_removal")["active-plugin.koplugin"])
     end)
 
     it("uses loader records when detecting active user plugins", function()
@@ -408,7 +443,7 @@ describe("PluginPackageManager", function()
         assert.are.equal("restart_required", status)
         assert.are.equal("directory", lfs.attributes(plugin_path, "mode"))
         assert.is_true(G_reader_settings:readSetting("plugins_disabled")["active-plugin"])
-        assert.is_true(G_reader_settings:readSetting("plugins_pending_removal")["active-plugin.koplugin"])
+        assert.is_table(G_reader_settings:readSetting("plugins_pending_removal")["active-plugin.koplugin"])
     end)
 
     it("uses loaded plugin metadata after discovery caches are reset", function()
@@ -438,6 +473,43 @@ describe("PluginPackageManager", function()
         assert.are.equal("restart_required", status)
         assert.are.equal("directory", lfs.attributes(plugin_path, "mode"))
         assert.is_true(G_reader_settings:readSetting("plugins_disabled")["loader_internal_name"])
+    end)
+
+    it("keeps runtime plugin keys for pending cleanup after restart", function()
+        local plugin_dir = path("plugins")
+        local plugin_path = plugin_dir .. "/active-plugin.koplugin"
+        assert.is_true(util.makePath(plugin_path))
+        local fp = assert(io.open(plugin_path .. "/main.lua", "w"))
+        fp:write("return { name = compute_name_somehow }")
+        fp:close()
+        PluginLoader.loaded_plugins = {
+            loader_internal_name = {},
+        }
+        PluginLoader.loaded_plugin_info = {
+            loader_internal_name = {
+                path = plugin_path,
+                plugin_key = "active-plugin",
+                name = "loader_internal_name",
+            },
+        }
+
+        local ok, err, status = PluginPackageManager:removeUserPlugin("active-plugin.koplugin", { plugin_dir = plugin_dir })
+
+        assert.is_nil(ok)
+        assert.truthy(err:match("currently active"))
+        assert.are.equal("restart_required", status)
+        assert.is_true(G_reader_settings:readSetting("plugins_disabled")["loader_internal_name"])
+
+        PluginLoader.loaded_plugins = nil
+        PluginLoader.loaded_plugin_info = nil
+
+        ok = PluginPackageManager:cleanupPendingRemovals({ plugin_dir = plugin_dir })
+
+        assert.is_true(ok)
+        assert.is_nil(lfs.attributes(plugin_path, "mode"))
+        assert.is_nil(G_reader_settings:readSetting("plugins_pending_removal")["active-plugin.koplugin"])
+        assert.is_nil(G_reader_settings:readSetting("plugins_disabled")["active-plugin"])
+        assert.is_nil(G_reader_settings:readSetting("plugins_disabled")["loader_internal_name"])
     end)
 
     it("cleans pending plugin removals on startup", function()

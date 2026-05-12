@@ -53,14 +53,15 @@ end
 
 function Device:applySafeAreaViewport()
     local insets = ios.getSafeAreaInsets()
+    insets.top = math.max(0, tonumber(insets.top) or 0)
+    insets.right = math.max(0, tonumber(insets.right) or 0)
+    insets.bottom = math.max(0, tonumber(insets.bottom) or 0)
+    insets.left = math.max(0, tonumber(insets.left) or 0)
     local previous_insets = self.ios_safe_area_insets or { top = 0, right = 0, bottom = 0, left = 0 }
     local insets_changed = previous_insets.top ~= insets.top
         or previous_insets.right ~= insets.right
         or previous_insets.bottom ~= insets.bottom
         or previous_insets.left ~= insets.left
-    self.ios_safe_area_insets = insets
-    logger.info(string.format("iOS safe area insets: top=%d right=%d bottom=%d left=%d",
-        insets.top, insets.right, insets.bottom, insets.left))
 
     local screen_w = self.screen:getScreenWidth()
     local screen_h = self.screen:getScreenHeight()
@@ -75,6 +76,9 @@ function Device:applySafeAreaViewport()
             viewport.x, viewport.y, viewport.w, viewport.h))
         return
     end
+    self.ios_safe_area_insets = insets
+    logger.info(string.format("iOS safe area insets: top=%d right=%d bottom=%d left=%d",
+        insets.top, insets.right, insets.bottom, insets.left))
     local viewport_changed = not self.viewport
         or self.viewport.x ~= viewport.x
         or self.viewport.y ~= viewport.y

@@ -103,7 +103,9 @@ function PluginPackageManager:listUserPlugins(plugin_dir)
     end
     for entry in lfs.dir(plugin_dir) do
         local path = plugin_dir .. "/" .. entry
-        if entry:sub(-9) == ".koplugin" and lfs.attributes(path, "mode") == "directory" then
+        local link_mode = lfs.symlinkattributes and lfs.symlinkattributes(path, "mode")
+        if entry:sub(-9) == ".koplugin" and link_mode ~= "link"
+                and lfs.attributes(path, "mode") == "directory" then
             table.insert(plugins, entry)
         end
     end
@@ -213,6 +215,9 @@ function PluginPackageManager:analyzeZip(zip_path)
 end
 
 local function removePathIfExists(path)
+    if lfs.symlinkattributes and lfs.symlinkattributes(path, "mode") == "link" then
+        return os.remove(path)
+    end
     local mode = lfs.attributes(path, "mode")
     if mode == "directory" then
         return ffiUtil.purgeDir(path)
@@ -356,9 +361,43 @@ local function getPendingRemovals()
     return pending
 end
 
-local function markPluginPendingRemoval(plugin_name)
+local function copyPluginKeys(keys)
+    local copied = {}
+    local seen = {}
+    if type(keys) == "table" then
+        for __, key in ipairs(keys) do
+            addPluginKey(copied, seen, key)
+        end
+    end
+    return copied
+end
+
+local function getPendingRemovalDisabledKeys(pending_value)
+    if type(pending_value) == "table" then
+        return copyPluginKeys(pending_value.disabled_keys)
+    end
+    return {}
+end
+
+local function mergePluginKeys(keys, extra_keys)
+    local merged = copyPluginKeys(keys)
+    local seen = {}
+    for __, key in ipairs(merged) do
+        seen[key] = true
+    end
+    if type(extra_keys) == "table" then
+        for __, key in ipairs(extra_keys) do
+            addPluginKey(merged, seen, key)
+        end
+    end
+    return merged
+end
+
+local function markPluginPendingRemoval(plugin_name, disabled_keys)
     local pending = getPendingRemovals()
-    pending[plugin_name] = true
+    pending[plugin_name] = {
+        disabled_keys = copyPluginKeys(disabled_keys),
+    }
     G_reader_settings:saveSetting(PENDING_REMOVAL_SETTING, pending)
     G_reader_settings:flush()
 end
@@ -466,7 +505,11 @@ function PluginPackageManager:installZip(zip_path, opts)
     ok, err = os.rename(staging, destination)
     if not ok then
         if backup then
-            os.rename(backup, destination)
+            local restore_ok, restore_err = os.rename(backup, destination)
+            if not restore_ok then
+                err = T(_("Could not install plugin: %1. The previous version could not be restored: %2"),
+                    err or _("unknown error"), restore_err or _("unknown error"))
+            end
         end
         removePathIfExists(staging)
         return nil, err
@@ -495,18 +538,19 @@ function PluginPackageManager:removeUserPlugin(plugin_name, opts)
     end
     local plugin_dir = opts.plugin_dir or self:getUserPluginDir()
     local plugin_path = self:getUserPluginPath(plugin_name, plugin_dir)
-    if lfs.attributes(plugin_path, "mode") ~= "directory" then
+    if (lfs.symlinkattributes and lfs.symlinkattributes(plugin_path, "mode") == "link")
+            or lfs.attributes(plugin_path, "mode") ~= "directory" then
         return nil, _("Plugin is not installed in the user plugin folder.")
     end
     local disabled_keys = getPluginDisabledKeys(plugin_name, plugin_path)
     local __, loaded_plugin, loaded_keys = findLoadedPlugin(plugin_name, plugin_path)
     if loaded_plugin then
         setPluginDisabledKeys(loaded_keys or disabled_keys)
-        markPluginPendingRemoval(plugin_name)
+        markPluginPendingRemoval(plugin_name, loaded_keys or disabled_keys)
         self:resetPluginLoaderCache()
         return nil, T(_("Plugin %1 is currently active and will be removed after restarting KOReader."), plugin_name), "restart_required"
     end
-    local ok, err = ffiUtil.purgeDir(plugin_path)
+    local ok, err = removePathIfExists(plugin_path)
     if not ok then
         return nil, err
     end
@@ -521,10 +565,13 @@ function PluginPackageManager:cleanupPendingRemovals(opts)
     local plugin_dir = opts.plugin_dir or self:getUserPluginDir()
     local pending = getPendingRemovals()
     local changed, failed = false, false
-    for plugin_name in pairs(pending) do
+    for plugin_name, pending_value in pairs(pending) do
         if isValidPluginDirName(plugin_name) then
             local plugin_path = self:getUserPluginPath(plugin_name, plugin_dir)
-            local disabled_keys = getPluginDisabledKeys(plugin_name, plugin_path)
+            local disabled_keys = mergePluginKeys(
+                getPluginDisabledKeys(plugin_name, plugin_path),
+                getPendingRemovalDisabledKeys(pending_value)
+            )
             local ok, err = removePathIfExists(plugin_path)
             if ok then
                 clearPluginDisabledKeys(disabled_keys)

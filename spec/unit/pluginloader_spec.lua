@@ -25,6 +25,7 @@ describe("PluginLoader", function()
         PluginLoader.all_plugins = nil
         PluginLoader.show_info = false
         G_reader_settings:saveSetting("plugins_disabled", {})
+        G_reader_settings:delSetting("extra_plugin_paths")
     end)
 
     after_each(function()
@@ -36,6 +37,7 @@ describe("PluginLoader", function()
         PluginLoader.all_plugins = nil
         PluginLoader.show_info = true
         G_reader_settings:saveSetting("plugins_disabled", {})
+        G_reader_settings:delSetting("extra_plugin_paths")
     end)
 
     it("disables plugins by stable directory key, not display name", function()
@@ -132,5 +134,22 @@ describe("PluginLoader", function()
         assert.is_true(ok, err)
         assert.are.same(running_instance, PluginLoader.loaded_plugins.internal_name)
         assert.are.equal("folder-key", PluginLoader.loaded_plugin_info.internal_name.plugin_key)
+    end)
+
+    it("skips the auto user plugin path when it has not been created yet", function()
+        local old_get_data_dir = DataStorage.getDataDir
+        DataStorage.getDataDir = function()
+            return path("missing-data")
+        end
+
+        local ok, discovered = pcall(function()
+            return PluginLoader:_discover()
+        end)
+        DataStorage.getDataDir = old_get_data_dir
+
+        assert.is_true(ok, discovered)
+        assert.is_table(discovered)
+        assert.are.same({ path("missing-data") .. "/plugins/" },
+            G_reader_settings:readSetting("extra_plugin_paths"))
     end)
 end)

@@ -35,11 +35,44 @@ describe("FileManager module", function()
             assert.is_nil(lfs.attributes(tmp_dir .. "/source/deep", "mode"))
             assert.is_true(FileManager:copyRecursive(tmp_dir .. "/source", tmp_dir .. "/dest"))
             assert.are.equal("file", lfs.attributes(tmp_dir .. "/dest/source/sub/file.txt", "mode"))
+            assert.is_false(FileManager:copyFileFromTo(tmp_dir .. "/dest/source/sub/file.txt", tmp_dir .. "/dest/source/sub/file.txt"))
             assert.is_true(FileManager:moveFile(tmp_dir .. "/move.txt", tmp_dir .. "/dest"))
             assert.are.equal("file", lfs.attributes(tmp_dir .. "/dest/move.txt", "mode"))
             assert.is_nil(lfs.attributes(tmp_dir .. "/move.txt", "mode"))
         end)
 
+        Device.isIOS = old_is_ios
+        util.purgeDir(tmp_dir)
+        assert.is_true(ok, err)
+    end)
+    it("should not leave partial iOS copies behind on copy failure", function()
+        local old_is_ios = Device.isIOS
+        local old_copy_file = util.copyFile
+        Device.isIOS = function() return true end
+        local tmp_dir = DataStorage:getDataDir() .. "/filemanager-ios-copy-failure-spec"
+        util.purgeDir(tmp_dir)
+        local ok, err = pcall(function()
+            assert.is_true(makePath(tmp_dir))
+            local source = tmp_dir .. "/source.txt"
+            local target = tmp_dir .. "/target.txt"
+            local fp = assert(io.open(source, "w"))
+            fp:write("source")
+            fp:close()
+            util.copyFile = function(_, to)
+                local partial = assert(io.open(to, "w"))
+                partial:write("partial")
+                partial:close()
+                return "simulated copy failure"
+            end
+
+            assert.is_false(FileManager:copyFileFromTo(source, target))
+            assert.is_nil(lfs.attributes(target, "mode"))
+            for entry in lfs.dir(tmp_dir) do
+                assert.is_nil(entry:match("koreader%-copy"))
+            end
+        end)
+
+        util.copyFile = old_copy_file
         Device.isIOS = old_is_ios
         util.purgeDir(tmp_dir)
         assert.is_true(ok, err)

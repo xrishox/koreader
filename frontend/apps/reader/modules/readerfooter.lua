@@ -34,6 +34,10 @@ local Screen = Device.screen
 local IOS_FOOTER_SIDE_INSET_RATIO = 0.075
 local IOS_FOOTER_BOTTOM_INSET_RATIO = 0.25
 
+local function nonNegativeWidth(width)
+    return math.max(0, math.floor(width or 0))
+end
+
 local MODE = {
     off = 0,
     page_progress = 1,
@@ -423,7 +427,7 @@ footerTextGeneratorMap = {
                 margin = footer:getEffectiveProgressMargin(footer._saved_screen_width)
             end
         end
-        local max_width = math.floor(footer._saved_screen_width - 2 * margin)
+        local max_width = nonNegativeWidth((footer._saved_screen_width or Screen:getWidth()) - 2 * margin)
         -- when the filler is between other items, it replaces the separator
         local text, is_filler_inside = footer:genAllFooterText(footerTextGeneratorMap.dynamic_filler)
         local tmp = TextWidget:new{
@@ -670,7 +674,7 @@ function ReaderFooter:getIOSFooterSideInset(screen_width)
     if self:getIOSBottomSafeAreaInset() <= 0 then
         return 0
     end
-    return math.floor((screen_width or Screen:getWidth()) * IOS_FOOTER_SIDE_INSET_RATIO)
+    return nonNegativeWidth((screen_width or Screen:getWidth()) * IOS_FOOTER_SIDE_INSET_RATIO)
 end
 
 function ReaderFooter:getEffectiveBottomPadding()
@@ -1057,14 +1061,12 @@ function ReaderFooter:resetLayout(force_reset)
     if self.settings.disable_progress_bar then
         self.progress_bar.width = 0
     elseif self.settings.progress_bar_position ~= "alongside" then
-        self.progress_bar.width = math.floor(new_screen_width -
-            2 * progress_margin)
+        self.progress_bar.width = nonNegativeWidth(new_screen_width - 2 * progress_margin)
     else
-        self.progress_bar.width = math.floor(new_screen_width -
-            2 * progress_margin - self.text_width)
+        self.progress_bar.width = nonNegativeWidth(new_screen_width - 2 * progress_margin - self.text_width)
     end
     if self.separator_line then
-        self.separator_line.dimen.w = new_screen_width - 2 * horizontal_margin
+        self.separator_line.dimen.w = nonNegativeWidth(new_screen_width - 2 * horizontal_margin)
     end
     if self.settings.disable_progress_bar then
         self.progress_bar.height = 0
@@ -2354,6 +2356,7 @@ function ReaderFooter:_updateFooterText(force_repaint, full_repaint)
     self.footer_text:setText(text)
     local horizontal_margin = self:getEffectiveHorizontalMargin(self._saved_screen_width)
     local progress_margin = self:getEffectiveProgressMargin(self._saved_screen_width)
+    local screen_width = self._saved_screen_width or Screen:getWidth()
 
     if self.settings.disable_progress_bar then
         if self.has_no_mode or text == "" then
@@ -2361,7 +2364,7 @@ function ReaderFooter:_updateFooterText(force_repaint, full_repaint)
             self.footer_text.height = 0
         else
             -- No progress bar, we're only constrained to fit inside self.footer_container
-            self.footer_text:setMaxWidth(math.floor(self._saved_screen_width - 2 * horizontal_margin))
+            self.footer_text:setMaxWidth(nonNegativeWidth(screen_width - 2 * horizontal_margin))
             self.text_width = self.footer_text:getSize().w
             self.footer_text.height = self.footer_text:getSize().h
         end
@@ -2375,15 +2378,15 @@ function ReaderFooter:_updateFooterText(force_repaint, full_repaint)
         else
             -- With a progress bar above or below us, we want to align ourselves to the bar's margins... iff text is centered.
             if self.settings.align == "center" then
-                self.footer_text:setMaxWidth(math.floor(self._saved_screen_width - margins_width))
+                self.footer_text:setMaxWidth(nonNegativeWidth(screen_width - margins_width))
             else
                 -- Otherwise, we have to constrain ourselves to the container, or weird shit happens.
-                self.footer_text:setMaxWidth(math.floor(self._saved_screen_width - 2 * horizontal_margin))
+                self.footer_text:setMaxWidth(nonNegativeWidth(screen_width - 2 * horizontal_margin))
             end
             self.text_width = self.footer_text:getSize().w
             self.footer_text.height = self.footer_text:getSize().h
         end
-        self.progress_bar.width = math.floor(self._saved_screen_width - margins_width)
+        self.progress_bar.width = nonNegativeWidth(screen_width - margins_width)
     else
         local margins_width = 2 * progress_margin
         if self.has_no_mode or text == "" then
@@ -2391,23 +2394,23 @@ function ReaderFooter:_updateFooterText(force_repaint, full_repaint)
             self.footer_text.height = 0
         else
             if self.settings.progress_bar_lock_width then -- Alongside text items, with fixed width setting.
-                local bar_width = (1/100 * self.settings.progress_bar_min_width_pct * self._saved_screen_width)
-                self.footer_text:setMaxWidth(math.floor(self._saved_screen_width - bar_width))
-                self.text_width = self._saved_screen_width - bar_width + horizontal_margin
+                local bar_width = (1/100 * self.settings.progress_bar_min_width_pct * screen_width)
+                self.footer_text:setMaxWidth(nonNegativeWidth(screen_width - bar_width))
+                self.text_width = nonNegativeWidth(screen_width - bar_width + horizontal_margin)
             else
                 -- Alongside text items (progress bar uses remaining space).
                 local text_max_available_ratio = (100 - self.settings.progress_bar_min_width_pct) * (1/100)
-                self.footer_text:setMaxWidth(math.floor(text_max_available_ratio * self._saved_screen_width - margins_width - horizontal_margin))
+                self.footer_text:setMaxWidth(nonNegativeWidth(text_max_available_ratio * screen_width - margins_width - horizontal_margin))
                 -- Add some spacing between the text and the bar
                 self.text_width = self.footer_text:getSize().w + horizontal_margin
             end
             self.footer_text.height = self.footer_text:getSize().h
         end
-        self.progress_bar.width = math.floor(self._saved_screen_width - margins_width - self.text_width)
+        self.progress_bar.width = nonNegativeWidth(screen_width - margins_width - self.text_width)
     end
 
     if self.separator_line then
-        self.separator_line.dimen.w = self._saved_screen_width - 2 * horizontal_margin
+        self.separator_line.dimen.w = nonNegativeWidth(screen_width - 2 * horizontal_margin)
     end
     self.text_container.dimen.w = self.text_width
     self.horizontal_group:resetLayout()

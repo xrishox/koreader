@@ -161,30 +161,34 @@ function PluginLoader:_discover()
     end
     for _, lookup_path in ipairs(lookup_path_list) do
         logger.info("Looking for plugins in directory:", lookup_path)
-        for entry in lfs.dir(lookup_path) do
-            local plugin_root = lookup_path.."/"..entry
-            local mode = lfs.attributes(plugin_root, "mode")
-            -- A valid KOReader plugin directory ends with .koplugin
-            if mode == "directory" and entry:sub(-9) == ".koplugin" then
-                local mainfile = plugin_root.."/main.lua"
-                local metafile = plugin_root.."/_meta.lua"
-                local disabled = false
-                local plugin_key = entry:sub(1, -10)
-                if plugins_disabled and plugins_disabled[plugin_key] then
-                    mainfile = metafile
-                    disabled = true
-                end
-                local __, name = util.splitFilePathName(plugin_root)
+        if lfs.attributes(lookup_path, "mode") == "directory" then
+            for entry in lfs.dir(lookup_path) do
+                local plugin_root = lookup_path.."/"..entry
+                local mode = lfs.attributes(plugin_root, "mode")
+                -- A valid KOReader plugin directory ends with .koplugin
+                if mode == "directory" and entry:sub(-9) == ".koplugin" then
+                    local mainfile = plugin_root.."/main.lua"
+                    local metafile = plugin_root.."/_meta.lua"
+                    local disabled = false
+                    local plugin_key = entry:sub(1, -10)
+                    if plugins_disabled and plugins_disabled[plugin_key] then
+                        mainfile = metafile
+                        disabled = true
+                    end
+                    local __, name = util.splitFilePathName(plugin_root)
 
-                table.insert(discovered, {
-                    ["main"] = mainfile,
-                    ["meta"] = metafile,
-                    ["path"] = plugin_root,
-                    ["disabled"] = disabled,
-                    ["name"] = name,
-                    ["plugin_key"] = plugin_key,
-                })
+                    table.insert(discovered, {
+                        ["main"] = mainfile,
+                        ["meta"] = metafile,
+                        ["path"] = plugin_root,
+                        ["disabled"] = disabled,
+                        ["name"] = name,
+                        ["plugin_key"] = plugin_key,
+                    })
+                end
             end
+        else
+            logger.warn("Skipping missing plugin directory:", lookup_path)
         end
     end
     return discovered
@@ -377,13 +381,15 @@ end
 
 --- Checks if a specific plugin is instantiated
 function PluginLoader:isPluginLoaded(name)
-   return self.loaded_plugins[name] ~= nil
+   return type(self.loaded_plugins) == "table" and self.loaded_plugins[name] ~= nil
 end
 
 --- Returns the current instance of a specific Plugin (if any)
 --- (NOTE: You can also usually access it via self.ui[plugin_name])
 function PluginLoader:getPluginInstance(name)
-   return self.loaded_plugins[name]
+   if type(self.loaded_plugins) == "table" then
+       return self.loaded_plugins[name]
+   end
 end
 
 -- *MUST* be called on destruction of whatever called createPluginInstance!
