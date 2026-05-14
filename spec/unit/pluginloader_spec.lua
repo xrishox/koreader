@@ -152,4 +152,44 @@ describe("PluginLoader", function()
         assert.are.same({ path("missing-data") .. "/plugins/" },
             G_reader_settings:readSetting("extra_plugin_paths"))
     end)
+
+    it("keeps iOS user plugins discoverable when extra_plugin_paths is stale", function()
+        local stale_path = path("stale-data/plugins/")
+        local current_data_dir = path("current-data")
+        local current_plugin_dir = current_data_dir .. "/plugins/"
+        local plugin_path = current_plugin_dir .. "simpleui.koplugin"
+        assert.is_true(util.makePath(plugin_path))
+
+        G_reader_settings:saveSetting("extra_plugin_paths", { stale_path })
+
+        local old_get_data_dir = DataStorage.getDataDir
+        local old_device = package.loaded.device
+        DataStorage.getDataDir = function()
+            return current_data_dir
+        end
+        package.loaded.device = {
+            isIOS = function()
+                return true
+            end,
+        }
+
+        local ok, discovered = pcall(function()
+            return PluginLoader:_discover()
+        end)
+
+        DataStorage.getDataDir = old_get_data_dir
+        package.loaded.device = old_device
+
+        assert.is_true(ok, discovered)
+        local found = false
+        for _, plugin in ipairs(discovered) do
+            if plugin.path:gsub("//+", "/") == plugin_path then
+                found = true
+                break
+            end
+        end
+        assert.is_true(found)
+        assert.are.same({ stale_path, current_plugin_dir },
+            G_reader_settings:readSetting("extra_plugin_paths"))
+    end)
 end)

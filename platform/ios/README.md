@@ -50,10 +50,17 @@ xcrun simctl launch "$DEVICE" rocks.koreader.koreader
 ./kodev release --ignore-translation ios-arm64
 ```
 
-This creates an unsigned hardware IPA. To install on a real device, sign
-`koreader-ios-arm64-apple-*-iphoneos/KOReader.app` with an Apple Development
-identity and a provisioning profile for bundle id `rocks.koreader.koreader`,
-then package it in a `Payload/KOReader.app` IPA.
+This creates an unsigned hardware IPA. For the normal local build/sign/install
+flow on a connected iPhone/iPad, use:
+
+```sh
+platform/ios/install-device.sh
+```
+
+Pass `--device <device-identifier-or-name>` when multiple devices are visible,
+or `--no-build` to reinstall the existing `iphoneos` output. The helper uses
+Xcode archive export signing, which avoids direct `codesign` keychain ACL
+failures while still installing a regular Apple Development signed app.
 
 ## Plugins
 

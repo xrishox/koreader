@@ -99,6 +99,32 @@ The app bundle inside that directory is:
 KOReader.app
 ```
 
+## Install On A Device
+
+Use the helper script for repeat installs on a connected iPhone/iPad:
+
+```sh
+platform/ios/install-device.sh
+```
+
+To target a specific device:
+
+```sh
+platform/ios/install-device.sh --device <device-identifier-or-name>
+```
+
+For a quick reinstall of an existing `iphoneos` build without rebuilding:
+
+```sh
+platform/ios/install-device.sh --no-build --device <device-identifier-or-name>
+```
+
+The script builds the hardware target, wraps `KOReader.app` in a temporary
+`.xcarchive`, lets Xcode export/sign it with Apple Development signing, verifies
+the result, and installs it with `xcrun devicectl`. This is the preferred local
+install path because direct command-line `codesign` may fail when the login
+keychain denies non-interactive private-key access.
+
 ## Signing For A Device
 
 The hardware app must be signed before it can be installed on a real device.

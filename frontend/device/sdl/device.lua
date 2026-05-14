@@ -164,6 +164,52 @@ local UbuntuTouch = Device:extend{
     isDefaultFullscreen = yes,
 }
 
+function Device:_resizeSDLWindow(ev)
+    local resize_w
+    local resize_h
+    if ev and ev.code == SDL.SDL.SDL_EVENT_WINDOW_RESIZED and ev.value then
+        resize_w = ev.value.data1
+        resize_h = ev.value.data2
+    end
+
+    self.screen:resize(resize_w, resize_h)
+    self.window.width = resize_w or self.screen.w
+    self.window.height = resize_h or self.screen.h
+
+    local new_size = self.screen:getSize()
+    logger.dbg("Resizing screen to", new_size)
+    return new_size
+end
+
+function Device:_broadcastSDLWindowResize(new_size)
+    -- try to catch as many flies as we can
+    -- this means we can't just return one ScreenResize or SetDimensons event
+    UIManager:broadcastEvent(Event:new("SetDimensions", new_size))
+    UIManager:broadcastEvent(Event:new("ScreenResize", new_size))
+    --- @todo Toggle this elsewhere based on ScreenResize?
+
+    -- this triggers paged media like PDF and DjVu to redraw
+    -- CreDocument doesn't need it
+    UIManager:broadcastEvent(Event:new("RedrawCurrentPage"))
+
+    local FileManager = require("apps/filemanager/filemanager")
+    if FileManager.instance then
+        FileManager.instance:reinit(FileManager.instance.path,
+            FileManager.instance.focused_file)
+    end
+
+    -- make sure dialogs are displayed
+    UIManager:setDirty("all", "ui")
+end
+
+function Device:onSDLWindowGeometryChanged(ev)
+    if ev.code == SDL.SDL.SDL_EVENT_WINDOW_RESIZED then
+        local new_size = self:_resizeSDLWindow(ev)
+        self:_broadcastSDLWindowResize(new_size)
+        return true
+    end
+end
+
 function Device:init()
     -- allows to set a viewport via environment variable
     -- syntax is Lua table syntax, e.g. EMULATE_READER_VIEWPORT="{x=10,w=550,y=5,h=790}"
@@ -203,7 +249,7 @@ function Device:init()
     self.input = require("device/input"):new{
         device = self,
         event_map = dofile("frontend/device/sdl/event_map_sdl2.lua"),
-        handleSdlEv = function(device_input, ev)
+        handleSdlEv = function(_device_input, ev)
 
             if ev.code == SDL.SDL.SDL_EVENT_MOUSE_WHEEL and (ev.value.integer_x ~= 0 or ev.value.integer_y ~= 0) then
                 local pos = Geom:new{
@@ -242,35 +288,12 @@ function Device:init()
                     local ReaderUI = require("apps/reader/readerui")
                     ReaderUI:doShowReader(dropped_file_path)
                 end
-            elseif ev.code == SDL.SDL.SDL_EVENT_WINDOW_RESIZED then
-                device_input.device.screen.resize(device_input.device.screen, ev.value.data1, ev.value.data2)
-                self.window.width = ev.value.data1
-                self.window.height = ev.value.data2
-
-                local new_size = device_input.device.screen:getSize()
-                device_input.device.screen.screen_size.w = new_size.w
-                device_input.device.screen.screen_size.h = new_size.h
-
-                logger.dbg("Resizing screen to", new_size)
-
-                -- try to catch as many flies as we can
-                -- this means we can't just return one ScreenResize or SetDimensons event
-                UIManager:broadcastEvent(Event:new("SetDimensions", new_size))
-                UIManager:broadcastEvent(Event:new("ScreenResize", new_size))
-                --- @todo Toggle this elsewhere based on ScreenResize?
-
-                -- this triggers paged media like PDF and DjVu to redraw
-                -- CreDocument doesn't need it
-                UIManager:broadcastEvent(Event:new("RedrawCurrentPage"))
-
-                local FileManager = require("apps/filemanager/filemanager")
-                if FileManager.instance then
-                    FileManager.instance:reinit(FileManager.instance.path,
-                        FileManager.instance.focused_file)
-                end
-
-                -- make sure dialogs are displayed
-                UIManager:setDirty("all", "ui")
+            elseif ev.code == SDL.SDL.SDL_EVENT_WINDOW_RESIZED
+                or ev.code == SDL.SDL.SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED
+                or ev.code == SDL.SDL.SDL_EVENT_WINDOW_SAFE_AREA_CHANGED
+                or ev.code == SDL.SDL.SDL_EVENT_DISPLAY_ORIENTATION
+                or ev.code == SDL.SDL.SDL_EVENT_DISPLAY_USABLE_BOUNDS_CHANGED then
+                self:onSDLWindowGeometryChanged(ev)
             elseif ev.code == SDL.SDL.SDL_EVENT_WINDOW_MOVED then
                 self.window.left = ev.value.data1
                 self.window.top = ev.value.data2

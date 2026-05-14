@@ -1,11 +1,13 @@
 local SDLDevice = require("device/sdl/device")
 local Event = require("ui/event")
 local Geom = require("ui/geometry")
+local SDL = require("ffi/SDL3")
 local ios = require("ios")
 local logger = require("logger")
 
 local function yes() return true end
 local function no() return false end
+local safe_area_refresh_delays = { 0.1, 0.5 }
 
 local Device = SDLDevice:extend{
     model = "iOS",
@@ -48,23 +50,79 @@ local Device = SDLDevice:extend{
 function Device:init()
     SDLDevice.init(self)
     self.hasClipboard = yes
-    self:applySafeAreaViewport()
+    self:applySafeAreaViewport("init")
 end
 
-function Device:applySafeAreaViewport()
+local function normalizeInsets(insets)
+    insets = insets or {}
+    return {
+        top = math.max(0, tonumber(insets.top) or 0),
+        right = math.max(0, tonumber(insets.right) or 0),
+        bottom = math.max(0, tonumber(insets.bottom) or 0),
+        left = math.max(0, tonumber(insets.left) or 0),
+    }
+end
+
+local function sameInsets(a, b)
+    return a.top == b.top
+        and a.right == b.right
+        and a.bottom == b.bottom
+        and a.left == b.left
+end
+
+local function sameViewport(a, b)
+    return a and b
+        and a.x == b.x
+        and a.y == b.y
+        and a.w == b.w
+        and a.h == b.h
+end
+
+function Device:_hasVisibleUI()
+    if not self.uimgr then
+        return false
+    end
+    if self.uimgr.getTopmostVisibleWidget then
+        return self.uimgr:getTopmostVisibleWidget() ~= nil
+    end
+    if self.uimgr._window_stack then
+        return #self.uimgr._window_stack > 0
+    end
+    return true
+end
+
+function Device:_broadcastIOSGeometryChanged()
+    if not self.uimgr or not self:_hasVisibleUI() then
+        self.ios_safe_area_broadcast_pending = true
+        return false
+    end
+    local usable_size = self:getReaderUsableScreenSize()
+    self.uimgr:broadcastEvent(Event:new("SetDimensions", usable_size))
+    self.uimgr:broadcastEvent(Event:new("ScreenResize", usable_size))
+    self.uimgr:broadcastEvent(Event:new("RedrawCurrentPage"))
+
+    local FileManager = require("apps/filemanager/filemanager")
+    if FileManager.instance then
+        FileManager.instance:reinit(FileManager.instance.path,
+            FileManager.instance.focused_file)
+    end
+
+    self.uimgr:setDirty("all", "full")
+    self.ios_safe_area_broadcast_pending = false
+    return true
+end
+
+function Device:applySafeAreaViewport(reason, force_broadcast)
     local insets = ios.getSafeAreaInsets()
-    insets.top = math.max(0, tonumber(insets.top) or 0)
-    insets.right = math.max(0, tonumber(insets.right) or 0)
-    insets.bottom = math.max(0, tonumber(insets.bottom) or 0)
-    insets.left = math.max(0, tonumber(insets.left) or 0)
+    insets = normalizeInsets(insets)
     local previous_insets = self.ios_safe_area_insets or { top = 0, right = 0, bottom = 0, left = 0 }
-    local insets_changed = previous_insets.top ~= insets.top
-        or previous_insets.right ~= insets.right
-        or previous_insets.bottom ~= insets.bottom
-        or previous_insets.left ~= insets.left
+    local insets_changed = not sameInsets(previous_insets, insets)
 
     local screen_w = self.screen:getScreenWidth()
     local screen_h = self.screen:getScreenHeight()
+    local previous_screen_size = self.ios_safe_area_screen_size or { w = 0, h = 0 }
+    local screen_size_changed = previous_screen_size.w ~= screen_w
+        or previous_screen_size.h ~= screen_h
     local viewport = Geom:new{
         x = insets.left,
         y = insets.top,
@@ -74,29 +132,25 @@ function Device:applySafeAreaViewport()
     if viewport.w <= 0 or viewport.h <= 0 then
         logger.warn(string.format("Ignoring invalid iOS safe area viewport: x=%d y=%d w=%d h=%d",
             viewport.x, viewport.y, viewport.w, viewport.h))
-        return
+        return false
     end
+    local viewport_changed = not sameViewport(self.viewport, viewport)
+    local broadcast_pending = self.ios_safe_area_broadcast_pending
+    if not viewport_changed and not insets_changed and not screen_size_changed
+        and not force_broadcast and not broadcast_pending then
+        return false
+    end
+
     self.ios_safe_area_insets = insets
-    logger.info(string.format("iOS safe area insets: top=%d right=%d bottom=%d left=%d",
-        insets.top, insets.right, insets.bottom, insets.left))
-    local viewport_changed = not self.viewport
-        or self.viewport.x ~= viewport.x
-        or self.viewport.y ~= viewport.y
-        or self.viewport.w ~= viewport.w
-        or self.viewport.h ~= viewport.h
-    if not viewport_changed and not insets_changed then
-        return
-    end
+    self.ios_safe_area_screen_size = { w = screen_w, h = screen_h }
+    logger.info(string.format("iOS safe area insets (%s): top=%d right=%d bottom=%d left=%d",
+        reason or "refresh", insets.top, insets.right, insets.bottom, insets.left))
 
     if viewport_changed then
         logger.info(string.format("iOS safe area viewport: x=%d y=%d w=%d h=%d",
             viewport.x, viewport.y, viewport.w, viewport.h))
         self.viewport = viewport
         self.screen:setViewport(viewport)
-        if self.screen.full_bb and self.screen._render then
-            self.screen.full_bb:fill(require("ffi/blitbuffer").COLOR_WHITE)
-            self.screen:_render(self.screen.full_bb, 0, 0, screen_w, screen_h)
-        end
     end
 
     self.ios_safe_area_input_offset = self.ios_safe_area_input_offset or { x = 0, y = 0 }
@@ -110,13 +164,62 @@ function Device:applySafeAreaViewport()
         self.ios_safe_area_input_adjusted = true
     end
 
-    if self.uimgr then
-        local usable_size = self:getReaderUsableScreenSize()
-        self.uimgr:broadcastEvent(Event:new("SetDimensions", usable_size))
-        self.uimgr:broadcastEvent(Event:new("ScreenResize", usable_size))
-        self.uimgr:broadcastEvent(Event:new("RedrawCurrentPage"))
-        self.uimgr:setDirty("all", "full")
+    local broadcasted = self:_broadcastIOSGeometryChanged()
+    if viewport_changed and broadcasted and self.uimgr.forceRePaint then
+        self.uimgr:forceRePaint()
     end
+    return true
+end
+
+function Device:scheduleSafeAreaViewportRefresh(reason, force_broadcast)
+    self.ios_safe_area_refresh_generation = (self.ios_safe_area_refresh_generation or 0) + 1
+    local generation = self.ios_safe_area_refresh_generation
+    self:applySafeAreaViewport(reason, force_broadcast)
+    if not self.uimgr then
+        return
+    end
+    for _, delay in ipairs(safe_area_refresh_delays) do
+        self.uimgr:scheduleIn(delay, function()
+            if generation == self.ios_safe_area_refresh_generation then
+                self:applySafeAreaViewport(reason, self.ios_safe_area_broadcast_pending)
+            end
+        end)
+    end
+end
+
+function Device:_schedulePendingSafeAreaBroadcast(reason)
+    if not self.uimgr then
+        return
+    end
+    local attempts_left = 12
+    local retry
+    retry = function()
+        self:applySafeAreaViewport(reason, self.ios_safe_area_broadcast_pending)
+        attempts_left = attempts_left - 1
+        if self.ios_safe_area_broadcast_pending and attempts_left > 0 then
+            self.uimgr:scheduleIn(0.25, retry)
+        end
+    end
+    if self.uimgr.nextTick then
+        self.uimgr:nextTick(retry)
+    else
+        retry()
+    end
+end
+
+function Device:onSDLWindowGeometryChanged(ev)
+    local code = ev.code
+    if self.input and self.input.resetState then
+        self.input:resetState()
+    end
+    if code == SDL.SDL.SDL_EVENT_WINDOW_RESIZED
+        or code == SDL.SDL.SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED
+        or code == SDL.SDL.SDL_EVENT_DISPLAY_ORIENTATION
+        or code == SDL.SDL.SDL_EVENT_DISPLAY_USABLE_BOUNDS_CHANGED then
+        self:_resizeSDLWindow(ev)
+    end
+    self:scheduleSafeAreaViewportRefresh("sdl event " .. tostring(code))
+    return true
 end
 
 function Device:getSafeAreaInsets()
@@ -131,10 +234,15 @@ function Device:getTopSafeAreaInset()
     return self:getSafeAreaInsets().top or 0
 end
 
+function Device:getReaderFooterReservedHeight(footer_reserved_height)
+    footer_reserved_height = math.max(0, tonumber(footer_reserved_height) or 0)
+    return math.max(0, footer_reserved_height - self:getBottomSafeAreaInset())
+end
+
 function Device:getReaderUsableScreenSize()
     return Geom:new{
         w = self.screen:getWidth(),
-        h = self.screen:getHeight() - self:getBottomSafeAreaInset(),
+        h = math.max(1, self.screen:getHeight() - self:getBottomSafeAreaInset()),
     }
 end
 
@@ -150,8 +258,8 @@ function Device:UIManagerReady(uimgr)
     self.uimgr = uimgr
     logger.info("iOS UIManager ready; enabling settings flush")
     self:flushSettingsForIOS("startup")
-    uimgr:scheduleIn(0.5, function() self:applySafeAreaViewport() end)
-    uimgr:scheduleIn(1.5, function() self:applySafeAreaViewport() end)
+    self:scheduleSafeAreaViewportRefresh("startup delayed", true)
+    self:_schedulePendingSafeAreaBroadcast("startup pending")
     self:scheduleIOSSettingsFlush()
 end
 

@@ -1104,7 +1104,11 @@ function ReaderFooter:getHeight()
 end
 
 function ReaderFooter:getReservedHeight()
-    return math.max(0, self:getHeight() - self.top_padding)
+    local reserved_height = math.max(0, self:getHeight() - self.top_padding)
+    if Device.getReaderFooterReservedHeight then
+        return Device:getReaderFooterReservedHeight(reserved_height)
+    end
+    return reserved_height
 end
 
 function ReaderFooter:disableFooter()

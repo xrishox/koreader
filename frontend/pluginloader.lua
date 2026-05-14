@@ -56,6 +56,26 @@ local function deprecationFmt(field)
     return true, s
 end
 
+local function normalizePluginPath(path)
+    if type(path) ~= "string" then return nil end
+    return path:gsub("/+$", "")
+end
+
+local function addLookupPath(lookup_path_list, seen_paths, path)
+    local normalized = normalizePluginPath(path)
+    if not normalized or normalized == "" then return false end
+    if normalized == normalizePluginPath(DEFAULT_PLUGIN_PATH) then return false end
+    if seen_paths[normalized] then return false end
+    seen_paths[normalized] = true
+    table.insert(lookup_path_list, path)
+    return true
+end
+
+local function isIOS()
+    local ok, Device = pcall(require, "device")
+    return ok and Device.isIOS and Device:isIOS()
+end
+
 -- Deprecated plugins are still available, but show a hint about deprecation.
 local function getMenuTable(plugin)
     local t = {}
@@ -136,7 +156,12 @@ function PluginLoader:_discover()
 
     local discovered = {}
     local lookup_path_list = { DEFAULT_PLUGIN_PATH }
+    local seen_lookup_paths = {
+        [normalizePluginPath(DEFAULT_PLUGIN_PATH)] = true,
+    }
     local extra_paths = G_reader_settings:readSetting("extra_plugin_paths")
+    local data_dir = require("datastorage"):getDataDir()
+    local user_plugin_path = data_dir ~= "." and data_dir .. "/plugins/" or nil
     if extra_paths then
         if type(extra_paths) == "string" then
             extra_paths = { extra_paths }
@@ -145,19 +170,24 @@ function PluginLoader:_discover()
             for _, extra_path in ipairs(extra_paths) do
                 local extra_path_mode = lfs.attributes(extra_path, "mode")
                 if extra_path_mode == "directory" and extra_path ~= DEFAULT_PLUGIN_PATH then
-                    table.insert(lookup_path_list, extra_path)
+                    addLookupPath(lookup_path_list, seen_lookup_paths, extra_path)
                 end
             end
         else
             logger.err("extra_plugin_paths config only accepts string or table value")
         end
     else
-        local data_dir = require("datastorage"):getDataDir()
-        if data_dir ~= "." then
-            local extra_path = data_dir .. "/plugins/"
-            G_reader_settings:saveSetting("extra_plugin_paths", { extra_path })
-            table.insert(lookup_path_list, extra_path)
+        if user_plugin_path then
+            G_reader_settings:saveSetting("extra_plugin_paths", { user_plugin_path })
+            addLookupPath(lookup_path_list, seen_lookup_paths, user_plugin_path)
         end
+    end
+    if user_plugin_path and isIOS() and addLookupPath(lookup_path_list, seen_lookup_paths, user_plugin_path) then
+        if type(extra_paths) ~= "table" then
+            extra_paths = {}
+        end
+        table.insert(extra_paths, user_plugin_path)
+        G_reader_settings:saveSetting("extra_plugin_paths", extra_paths)
     end
     for _, lookup_path in ipairs(lookup_path_list) do
         logger.info("Looking for plugins in directory:", lookup_path)
