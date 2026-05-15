@@ -26,6 +26,22 @@ if ffi_ok then
     const char *KOIOSGetPluginZipImportPath(void);
     const char *KOIOSGetPluginZipImportError(void);
     void KOIOSConsumePluginZipImportResult(void);
+    int KOIOSRequestFileImport(const char *destination_path);
+    int KOIOSGetFileImportStatus(void);
+    int KOIOSGetFileImportCount(void);
+    const char *KOIOSGetFileImportError(void);
+    void KOIOSConsumeFileImportResult(void);
+    int KOIOSRequestExternalFolderPicker(void);
+    int KOIOSGetExternalFolderPickerStatus(void);
+    const char *KOIOSGetExternalFolderPickerPath(void);
+    const char *KOIOSGetExternalFolderPickerBookmark(void);
+    const char *KOIOSGetExternalFolderPickerError(void);
+    void KOIOSConsumeExternalFolderPickerResult(void);
+    int KOIOSResolveExternalFolderBookmark(const char *bookmark_b64,
+                                           char *out_path, size_t path_capacity,
+                                           char *out_bookmark_b64, size_t bookmark_capacity,
+                                           char *out_error, size_t error_capacity);
+    int KOIOSReleaseExternalFolderBookmark(const char *bookmark_b64);
     ]]
 end
 
@@ -46,6 +62,10 @@ local function cint(fn, fallback)
     end
     return fallback
 end
+
+local external_folder_path_max = 4096
+local external_folder_bookmark_max = 65536
+local external_folder_error_max = 1024
 
 local ios = {}
 
@@ -155,6 +175,113 @@ function ios.consumePluginZipImportResult()
         return
     end
     pcall(function() ffi.C.KOIOSConsumePluginZipImportResult() end)
+end
+
+function ios.requestFileImport(destination_path)
+    return cint(function() return ffi.C.KOIOSRequestFileImport(destination_path) end, false)
+end
+
+function ios.getFileImportResult()
+    if not ffi_ok then
+        return "failed", "iOS bridge is not available"
+    end
+    local ok, status = pcall(function()
+        return tonumber(ffi.C.KOIOSGetFileImportStatus())
+    end)
+    if not ok then
+        return "failed", "iOS bridge is not available"
+    end
+    if status == 1 then
+        return "pending"
+    elseif status == 2 then
+        local count = 0
+        pcall(function()
+            count = tonumber(ffi.C.KOIOSGetFileImportCount()) or 0
+        end)
+        return "ok", count, cstring(function() return ffi.C.KOIOSGetFileImportError() end, "")
+    elseif status == 3 then
+        return "cancelled"
+    elseif status == 4 then
+        return "failed", cstring(function() return ffi.C.KOIOSGetFileImportError() end, "")
+    end
+    return "idle"
+end
+
+function ios.consumeFileImportResult()
+    if not ffi_ok then
+        return
+    end
+    pcall(function() ffi.C.KOIOSConsumeFileImportResult() end)
+end
+
+function ios.requestExternalFolderPicker()
+    return cint(function() return ffi.C.KOIOSRequestExternalFolderPicker() end, false)
+end
+
+function ios.getExternalFolderPickerResult()
+    if not ffi_ok then
+        return "failed", "iOS bridge is not available"
+    end
+    local ok, status = pcall(function()
+        return tonumber(ffi.C.KOIOSGetExternalFolderPickerStatus())
+    end)
+    if not ok then
+        return "failed", "iOS bridge is not available"
+    end
+    if status == 1 then
+        return "pending"
+    elseif status == 2 then
+        local path = cstring(function() return ffi.C.KOIOSGetExternalFolderPickerPath() end, "")
+        local bookmark = cstring(function() return ffi.C.KOIOSGetExternalFolderPickerBookmark() end, "")
+        if path == "" or bookmark == "" then
+            return "failed", "No external folder path was returned"
+        end
+        return "ok", path, bookmark
+    elseif status == 3 then
+        return "cancelled"
+    elseif status == 4 then
+        return "failed", cstring(function() return ffi.C.KOIOSGetExternalFolderPickerError() end, "")
+    end
+    return "idle"
+end
+
+function ios.consumeExternalFolderPickerResult()
+    if not ffi_ok then
+        return
+    end
+    pcall(function() ffi.C.KOIOSConsumeExternalFolderPickerResult() end)
+end
+
+function ios.resolveExternalFolderBookmark(bookmark)
+    if not ffi_ok then
+        return nil, "iOS bridge is not available"
+    end
+    local out_path = ffi.new("char[?]", external_folder_path_max)
+    local out_bookmark = ffi.new("char[?]", external_folder_bookmark_max)
+    local out_error = ffi.new("char[?]", external_folder_error_max)
+    local ok, resolved = pcall(function()
+        return tonumber(ffi.C.KOIOSResolveExternalFolderBookmark(
+            bookmark,
+            out_path, external_folder_path_max,
+            out_bookmark, external_folder_bookmark_max,
+            out_error, external_folder_error_max
+        )) ~= 0
+    end)
+    if not ok then
+        return nil, "iOS bridge is not available"
+    end
+    if not resolved then
+        return nil, ffi.string(out_error)
+    end
+    local refreshed_bookmark = ffi.string(out_bookmark)
+    if refreshed_bookmark == "" then
+        refreshed_bookmark = nil
+    end
+    return ffi.string(out_path), nil, refreshed_bookmark
+end
+
+function ios.releaseExternalFolderBookmark(bookmark)
+    return cint(function() return ffi.C.KOIOSReleaseExternalFolderBookmark(bookmark) end, false)
 end
 
 return ios

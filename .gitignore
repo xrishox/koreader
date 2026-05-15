@@ -40,4 +40,5 @@ i18n
 
 /.cproject
 /.project
+/KOReader.xcodeproj/
 .gitignore~

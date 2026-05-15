@@ -16,16 +16,12 @@ The iOS branch was originally audited against:
 - KOReader base submodule baseline:
   `7a46ea3812539083ee25b06f0c81ac58b1356ee0`
 
-The current iOS branch includes:
-
-- Parent iOS branch head at the time of this guide:
-  `49b340c01db76bb1eb248fbdce6bf53107a57736`
-- Base iOS branch head at the time of this guide:
-  `eba9182113391142d7d83019b366d4a0da548e99`
-
 The iOS branch also changes `.gitmodules` so the `base` submodule is fetched
 from the iOS base fork. That is currently required because several iOS build
 and runtime changes live in `base`, not only in the parent KOReader tree.
+
+Use `git rev-parse HEAD` in the parent repository and `git -C base rev-parse
+HEAD` in the submodule when you need the exact current rebase starting points.
 
 ## Rebase Goal
 
@@ -94,6 +90,8 @@ Files:
 - `kodev`
 - `make/ios.mk`
 - `platform/ios/Info.plist`
+- `platform/ios/project.yml`
+- `platform/ios/xcode-make.sh`
 - `platform/ios/native/CMakeLists.txt`
 - `platform/ios/native/LaunchScreen.storyboard`
 - `platform/ios/icons/*`
@@ -114,6 +112,8 @@ Important design decisions:
   `iphonesimulator` artifacts do not collide.
 - Hardware output is unsigned. Signing is intentionally local to the developer
   because Apple identities and provisioning profiles are account-specific.
+- Hardware device installs should use the generated Xcode project so Xcode owns
+  Apple Development signing and provisioning.
 - Fonts are copied instead of symlinked into the app payload. Symlinks inside
   the final iOS bundle are a packaging/signing risk.
 - Several plugins and tools are excluded from iOS release packaging when they
@@ -154,6 +154,8 @@ The bridge exposes C-callable functions that Lua reaches through FFI:
 - clipboard read/write
 - share sheet
 - plugin ZIP document picker
+- file import picker
+- external folder picker for Files/iCloud/provider folders
 
 Design decisions:
 
@@ -162,15 +164,21 @@ Design decisions:
 - UIKit operations are dispatched to the main thread where required.
 - Plugin ZIP selection copies the chosen security-scoped file into a temporary
   app-controlled location before Lua processes it.
-- The bridge keeps plugin picker state explicitly: idle, pending, finished,
+- External folder selection keeps the picked folder in place. The native bridge
+  stores a bookmark, resolves it on later launches, and keeps the resolved
+  security-scoped URL active for the app session.
+- The bridge keeps native picker state explicitly: idle, pending, finished,
   cancelled, failed.
 
 Rebase guidance:
 
 - Keep the native bridge small. Do not move reader logic into Objective-C.
-- Preserve security-scoped file access for document picker imports.
+- Preserve security-scoped file access for document picker imports and external
+  folder access.
 - Preserve the temporary-copy model for plugin ZIPs. Lua should not process
   external provider URLs directly.
+- Preserve the in-place model for external folders. They should appear through
+  normal KOReader folder shortcuts, not through a separate iOS-only browser.
 - If adding more bridge APIs, expose narrow operations rather than UIKit objects.
 
 ### Data And Module Paths
@@ -555,9 +563,9 @@ Rebase guidance:
 - Keep the k2pdfopt no-shell patch unless upstream has removed those iOS
   incompatible calls or provided a better compile-time option.
 
-## Current Upstream Rebase Hotspots
+## Known Upstream Rebase Hotspots
 
-As of the last audit, current upstream `origin/master` overlaps these iOS files:
+The last upstream-diff audit found overlap in these iOS-touched files:
 
 - `base`
 - `datastorage.lua`
@@ -609,6 +617,7 @@ Focused tests:
 - `spec/unit/filemanager_spec.lua`
 - `spec/unit/readerfooter_spec.lua`
 - `spec/unit/ios_bridge_spec.lua`
+- `spec/unit/iosfolderaccess_spec.lua`
 
 Build validation:
 
@@ -624,6 +633,8 @@ Manual iOS validation:
 - orientation changes keep layout and input aligned
 - settings survive background/foreground and force-close scenarios
 - plugin ZIP install succeeds from Files picker
+- external Files/iCloud folder can be added from Folder shortcuts
+- external folder shortcut still works after app relaunch
 - plugin replacement rollback works on failure
 - inactive user plugin removal deletes files
 - active user plugin removal disables now and deletes after restart

@@ -19,7 +19,7 @@ local Device = SDLDevice:extend{
     hasDPad = no,
     canRestart = no,
     hasExitOptions = no,
-    canSuspend = yes,
+    canSuspend = no,
     canStandby = no,
     canBackgroundRerender = no,
     canRunInSubProcess = no,
@@ -32,8 +32,9 @@ local Device = SDLDevice:extend{
     end,
     canExternalDictLookup = no,
     canImportFiles = yes,
+    canExecuteScript = no,
     canShareText = ios.canShareText,
-    shareText = function(_, text, reason, title, mimetype)
+    doShareText = function(_, text, reason, title, mimetype)
         return ios.shareText(text, reason, title, mimetype)
     end,
     requestPluginZipImport = function()
@@ -45,12 +46,99 @@ local Device = SDLDevice:extend{
     consumePluginZipImportResult = function()
         return ios.consumePluginZipImportResult()
     end,
+    canPickExternalFolders = yes,
+    requestExternalFolderPicker = function()
+        return ios.requestExternalFolderPicker()
+    end,
+    getExternalFolderPickerResult = function()
+        return ios.getExternalFolderPickerResult()
+    end,
+    consumeExternalFolderPickerResult = function()
+        return ios.consumeExternalFolderPickerResult()
+    end,
+    resolveExternalFolderBookmark = function(_, bookmark)
+        return ios.resolveExternalFolderBookmark(bookmark)
+    end,
+    releaseExternalFolderBookmark = function(_, bookmark)
+        return ios.releaseExternalFolderBookmark(bookmark)
+    end,
 }
 
 function Device:init()
     SDLDevice.init(self)
     self.hasClipboard = yes
     self:applySafeAreaViewport("init")
+end
+
+function Device:setEventHandlers(uimgr)
+    uimgr.event_handlers.Suspend = function()
+        self:simulateSuspend()
+    end
+    uimgr.event_handlers.Resume = function()
+        self:simulateResume()
+    end
+end
+
+function Device.importFile(path)
+    local UIManager = require("ui/uimanager")
+    local InfoMessage = require("ui/widget/infomessage")
+    local _ = require("gettext")
+    local N_ = _.ngettext
+    local T = require("ffi/util").template
+
+    local function showWarning(text)
+        UIManager:show(InfoMessage:new{
+            text = text,
+            icon = "notice-warning",
+        })
+    end
+
+    if not ios.requestFileImport(path) then
+        local status, err = ios.getFileImportResult()
+        if status ~= "pending" then
+            ios.consumeFileImportResult()
+        end
+        if status == "pending" then
+            showWarning(_("The iOS file picker is already open."))
+        else
+            showWarning(status == "failed" and err ~= "" and err or _("Could not open the iOS file picker."))
+        end
+        return false
+    end
+
+    UIManager:show(InfoMessage:new{
+        text = _("Choose files to import."),
+    })
+    local function refreshFileManager()
+        local ok, FileManager = pcall(require, "apps/filemanager/filemanager")
+        if ok and FileManager.instance then
+            FileManager.instance:onRefresh()
+        end
+    end
+    local function pollPicker()
+        local status, value, err = ios.getFileImportResult()
+        if status == "pending" then
+            UIManager:scheduleIn(0.25, pollPicker)
+        elseif status == "ok" then
+            ios.consumeFileImportResult()
+            local count = tonumber(value) or 0
+            refreshFileManager()
+            if err and err ~= "" then
+                showWarning(T(_("Imported %1 file(s), but some files failed:\n%2"), count, err))
+            elseif count > 0 then
+                UIManager:show(InfoMessage:new{
+                    text = T(N_("Imported 1 file.", "Imported %1 files.", count), count),
+                })
+            end
+        elseif status == "cancelled" then
+            ios.consumeFileImportResult()
+        else
+            ios.consumeFileImportResult()
+            showWarning(T(_("File import failed: %1"), value or _("unknown error")))
+        end
+    end
+    UIManager:scheduleIn(0.25, pollPicker)
+    return true
 end
 
 local function normalizeInsets(insets)
@@ -256,6 +344,12 @@ end
 function Device:UIManagerReady(uimgr)
     SDLDevice.UIManagerReady(self, uimgr)
     self.uimgr = uimgr
+    local ok, IOSFolderAccess = pcall(require, "iosfolderaccess")
+    if ok then
+        IOSFolderAccess:resolveSavedFolders(self)
+    else
+        logger.warn("iOS folder access setup failed:", IOSFolderAccess)
+    end
     logger.info("iOS UIManager ready; enabling settings flush")
     self:flushSettingsForIOS("startup")
     self:scheduleSafeAreaViewportRefresh("startup delayed", true)

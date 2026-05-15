@@ -1,0 +1,70 @@
+name: KOReader
+
+options:
+  deploymentTarget:
+    iOS: "15.0"
+
+settings:
+  base:
+    PRODUCT_NAME: KOReader
+    PRODUCT_BUNDLE_IDENTIFIER: rocks.koreader.koreader
+    IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
+    SUPPORTS_MACCATALYST: NO
+    DSTROOT: "$(BUILD_DIR)/$(PROJECT_NAME).dst"
+    ARCHS: arm64
+    ONLY_ACTIVE_ARCH: YES
+    CODE_SIGN_STYLE: Automatic
+
+targets:
+  KOReader:
+    type: application
+    platform: iOS
+    sources:
+      - path: platform/ios/native/KOReaderIOSMain.m
+      - path: platform/ios/native/LaunchScreen.storyboard
+        buildPhase: resources
+      - path: platform/ios/icons/AppIcon60x60@2x.png
+        buildPhase: resources
+      - path: platform/ios/icons/AppIcon60x60@3x.png
+        buildPhase: resources
+      - path: platform/ios/icons/AppIcon76x76@2x.png
+        buildPhase: resources
+      - path: platform/ios/icons/AppIcon83.5x83.5@2x.png
+        buildPhase: resources
+      - path: platform/ios/icons/AppIcon1024.png
+        buildPhase: resources
+    settings:
+      base:
+        CLANG_ENABLE_OBJC_ARC: YES
+        INFOPLIST_FILE: platform/ios/Info.plist
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/koreader-ios-xcode/$(PLATFORM_NAME)/staging/include"
+          - "$(SRCROOT)/koreader-ios-xcode/$(PLATFORM_NAME)/staging/include/luajit-2.1"
+        LIBRARY_SEARCH_PATHS:
+          - "$(SRCROOT)/koreader-ios-xcode/$(PLATFORM_NAME)/staging/lib"
+        LD_RUNPATH_SEARCH_PATHS:
+          - "@executable_path/reader/libs"
+        OTHER_CODE_SIGN_FLAGS:
+          - "--deep"
+        OTHER_LDFLAGS:
+          - "$(inherited)"
+          - "-lluajit"
+          - "-lSDL3"
+          - "-framework"
+          - "Foundation"
+          - "-framework"
+          - "UIKit"
+          - "-framework"
+          - "UniformTypeIdentifiers"
+    preBuildScripts:
+      - name: Stage KOReader Payload
+        basedOnDependencyAnalysis: false
+        script: |
+          "${SRCROOT}/platform/ios/xcode-make.sh" ios-xcode-stage
+    postBuildScripts:
+      - name: Embed KOReader Payload
+        basedOnDependencyAnalysis: false
+        script: |
+          IOS_XCODE_APP="${TARGET_BUILD_DIR}/${WRAPPER_NAME}" "${SRCROOT}/platform/ios/xcode-make.sh" ios-xcode-embed-only

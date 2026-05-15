@@ -13,7 +13,7 @@ iPhone/iPad hardware and Apple Silicon iOS simulators.
 The build expects GNU tools ahead of the macOS BSD variants:
 
 ```sh
-brew install make findutils coreutils gnu-sed grep gnu-getopt gettext util-linux cmake ninja pkg-config autoconf automake libtool
+brew install make findutils coreutils gnu-sed grep gnu-getopt gettext util-linux cmake ninja pkg-config autoconf automake libtool xcodegen
 ```
 
 Use this PATH prefix when building:
@@ -51,16 +51,23 @@ xcrun simctl launch "$DEVICE" rocks.koreader.koreader
 ```
 
 This creates an unsigned hardware IPA. For the normal local build/sign/install
-flow on a connected iPhone/iPad, use:
+flow on a connected iPhone/iPad, use the generated Xcode project and let Xcode
+perform Apple Development signing with the selected development team.
+
+## Xcode Project
+
+Generate an Xcode project when you want to pick a signing team and run from
+Xcode:
 
 ```sh
-platform/ios/install-device.sh
+./kodev xcodeproj
+open KOReader.xcodeproj
 ```
 
-Pass `--device <device-identifier-or-name>` when multiple devices are visible,
-or `--no-build` to reinstall the existing `iphoneos` output. The helper uses
-Xcode archive export signing, which avoids direct `codesign` keychain ACL
-failures while still installing a regular Apple Development signed app.
+The generated project uses Xcode for the app shell, signing, and launch. Its
+build phases call back into the existing KOReader iOS Makefile to stage the Lua
+payload and native libraries, so the command-line and Xcode builds use the same
+runtime layout.
 
 ## Plugins
 

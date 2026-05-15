@@ -30,7 +30,9 @@ local function showConfirmBox(touchmenu_instance)
     })
 end
 
-if Device:isCervantes() or Device:isKobo() then
+if Device:isIOS() then
+    return { disabled = true }
+elseif Device:isCervantes() or Device:isKobo() then
     enable = function() PluginShare.pause_auto_suspend = true end
     disable = function() PluginShare.pause_auto_suspend = false end
 elseif Device:isKindle() then

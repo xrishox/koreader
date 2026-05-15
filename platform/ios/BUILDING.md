@@ -11,7 +11,7 @@ runtime is installed for simulator builds.
 Install the build tools KOReader expects:
 
 ```sh
-brew install make findutils coreutils gnu-sed grep gnu-getopt gettext util-linux cmake ninja pkg-config autoconf automake libtool
+brew install make findutils coreutils gnu-sed grep gnu-getopt gettext util-linux cmake ninja pkg-config autoconf automake libtool xcodegen
 ```
 
 The GNU tools must be preferred over the BSD tools that ship with macOS. If your
@@ -99,64 +99,39 @@ The app bundle inside that directory is:
 KOReader.app
 ```
 
-## Install On A Device
+## Build And Run From Xcode
 
-Use the helper script for repeat installs on a connected iPhone/iPad:
-
-```sh
-platform/ios/install-device.sh
-```
-
-To target a specific device:
+Generate the project:
 
 ```sh
-platform/ios/install-device.sh --device <device-identifier-or-name>
+./kodev xcodeproj
+open KOReader.xcodeproj
 ```
 
-For a quick reinstall of an existing `iphoneos` build without rebuilding:
+Select the `KOReader` scheme, choose a simulator or connected device, set your
+Apple Development team under Signing & Capabilities if needed, then Run.
+
+The generated Xcode project is intentionally not checked in. Its source is
+`platform/ios/project.yml`, and the build phases call
+`platform/ios/xcode-make.sh`, which normalizes the Xcode platform/architecture
+into the same `TARGET=ios IOS_ARCH=...` Makefile build used by
+`./kodev release`.
+
+To validate the generated project without signing:
 
 ```sh
-platform/ios/install-device.sh --no-build --device <device-identifier-or-name>
+./kodev xcodeproj
+xcodebuild -project KOReader.xcodeproj -scheme KOReader \
+  -configuration Release -destination 'generic/platform=iOS' \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
 ```
 
-The script builds the hardware target, wraps `KOReader.app` in a temporary
-`.xcarchive`, lets Xcode export/sign it with Apple Development signing, verifies
-the result, and installs it with `xcrun devicectl`. This is the preferred local
-install path because direct command-line `codesign` may fail when the login
-keychain denies non-interactive private-key access.
+## Hardware Device Signing
 
-## Signing For A Device
-
-The hardware app must be signed before it can be installed on a real device.
-Use an Apple Development identity and a provisioning profile whose app id
-matches:
-
-```text
-rocks.koreader.koreader
-```
-
-The exact signing command depends on your local certificate and provisioning
-profile. The general flow is:
-
-1. Put the provisioning profile into `KOReader.app/embedded.mobileprovision`.
-2. Extract the profile entitlements.
-3. Sign nested dylibs/framework-like binaries first, if present.
-4. Sign `KOReader.app` with the extracted entitlements.
-5. Package `Payload/KOReader.app` into an IPA.
-6. Install with Xcode, Devices and Simulators, or `xcrun devicectl`.
-
-Useful commands for discovering local signing state:
-
-```sh
-security find-identity -v -p codesigning
-xcrun devicectl list devices
-```
-
-Install a signed IPA on a connected device:
-
-```sh
-xcrun devicectl device install app --device <device-identifier> /path/to/koreader-ios-arm64-signed.ipa
-```
+Hardware installs are signed by Xcode with a local Apple Development team and
+provisioning profile. Prefer the generated Xcode project for this. Direct
+`codesign` from non-GUI automation can fail even when the certificate exists,
+because the private key is protected by the login keychain.
 
 ## Build Outputs
 

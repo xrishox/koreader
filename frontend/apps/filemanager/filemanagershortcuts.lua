@@ -1,5 +1,6 @@
 local BD = require("ui/bidi")
 local ButtonDialog = require("ui/widget/buttondialog")
+local Device = require("device")
 local InfoMessage = require("ui/widget/infomessage")
 local InputDialog = require("ui/widget/inputdialog")
 local Menu = require("ui/widget/menu")
@@ -13,6 +14,21 @@ local FileManagerShortcuts = WidgetContainer:extend{
     folder_shortcuts = G_reader_settings:readSetting("folder_shortcuts", {}),
 }
 
+local function getIOSFolderAccess()
+    if Device.isIOS and Device:isIOS() then
+        local ok, IOSFolderAccess = pcall(require, "iosfolderaccess")
+        if ok then
+            return IOSFolderAccess
+        end
+    end
+end
+
+local function basename(path)
+    path = path:gsub("/+$", "")
+    if path == "" then return "/" end
+    return path:match("([^/]+)$") or path
+end
+
 function FileManagerShortcuts:updateItemTable()
     local item_table = {}
     for folder, item in pairs(self.folder_shortcuts) do
@@ -20,6 +36,7 @@ function FileManagerShortcuts:updateItemTable()
             text = string.format("%s (%s)", item.text, folder),
             folder = folder,
             name = item.text,
+            ios_external_folder = item.ios_external_folder,
         })
     end
     table.sort(item_table, function(l, r)
@@ -34,7 +51,14 @@ end
 
 function FileManagerShortcuts:onMenuChoice(item)
     local folder = item.folder
-    if lfs.attributes(folder, "mode") ~= "directory" then return end
+    if lfs.attributes(folder, "mode") ~= "directory" then
+        if item.ios_external_folder then
+            UIManager:show(InfoMessage:new{
+                text = _("This iOS folder is not currently available."),
+            })
+        end
+        return
+    end
     if self.select_callback then
         self.select_callback(folder)
     else
@@ -86,6 +110,11 @@ function FileManagerShortcuts:onMenuHold(item)
 end
 
 function FileManagerShortcuts:removeShortcut(folder)
+    local IOSFolderAccess = getIOSFolderAccess()
+    if IOSFolderAccess then
+        IOSFolderAccess:removeShortcut(folder, Device)
+        self.folder_shortcuts = G_reader_settings:readSetting("folder_shortcuts", self.folder_shortcuts)
+    end
     self.folder_shortcuts[folder] = nil
     if self.shortcuts_menu then
         self.fm_updated = true
@@ -118,6 +147,10 @@ function FileManagerShortcuts:editShortcut(folder, post_callback)
                     UIManager:close(input_dialog)
                     if item then
                         item.text = new_name
+                        local IOSFolderAccess = getIOSFolderAccess()
+                        if IOSFolderAccess then
+                            IOSFolderAccess:renameShortcut(folder, new_name)
+                        end
                     else
                         self.folder_shortcuts[folder] = { text = new_name, time = os.time() }
                         if post_callback then
@@ -136,7 +169,7 @@ function FileManagerShortcuts:editShortcut(folder, post_callback)
     input_dialog:onShowKeyboard()
 end
 
-function FileManagerShortcuts:addShortcut()
+function FileManagerShortcuts:addLocalShortcut()
     local PathChooser = require("ui/widget/pathchooser")
     local path_chooser = PathChooser:new{
         select_directory = true,
@@ -153,6 +186,122 @@ function FileManagerShortcuts:addShortcut()
         end,
     }
     UIManager:show(path_chooser)
+end
+
+function FileManagerShortcuts:addExternalFolderShortcut()
+    if not Device.canPickExternalFolders or not Device:canPickExternalFolders()
+            or not Device.requestExternalFolderPicker then
+        UIManager:show(InfoMessage:new{
+            text = _("External folder picking is not available on this device."),
+        })
+        return
+    end
+    if not Device:requestExternalFolderPicker() then
+        UIManager:show(InfoMessage:new{
+            text = _("Could not open the iOS folder picker."),
+        })
+        return
+    end
+
+    UIManager:show(InfoMessage:new{
+        text = _("Choose a folder from Files."),
+    })
+    local function pollPicker()
+        local status, path, bookmark = Device:getExternalFolderPickerResult()
+        if status == "pending" then
+            UIManager:scheduleIn(0.25, pollPicker)
+        elseif status == "ok" then
+            if Device.consumeExternalFolderPickerResult then
+                Device:consumeExternalFolderPickerResult()
+            end
+            self:editExternalFolderShortcut(path, bookmark)
+        elseif status == "cancelled" then
+            if Device.consumeExternalFolderPickerResult then
+                Device:consumeExternalFolderPickerResult()
+            end
+        else
+            if Device.consumeExternalFolderPickerResult then
+                Device:consumeExternalFolderPickerResult()
+            end
+            UIManager:show(InfoMessage:new{
+                text = _("iOS folder picker failed: ") .. (path or _("unknown error")),
+            })
+        end
+    end
+    UIManager:scheduleIn(0.25, pollPicker)
+end
+
+function FileManagerShortcuts:editExternalFolderShortcut(path, bookmark)
+    local IOSFolderAccess = getIOSFolderAccess()
+    if not IOSFolderAccess then return end
+
+    local default_name = basename(path)
+    local input_dialog
+    input_dialog = InputDialog:new {
+        title = _("Enter folder shortcut name"),
+        input = default_name,
+        description = BD.dirpath(path),
+        buttons = {{
+            {
+                text = _("Cancel"),
+                id = "close",
+                callback = function()
+                    UIManager:close(input_dialog)
+                end,
+            },
+            {
+                text = _("Save"),
+                is_enter_default = true,
+                callback = function()
+                    local name = input_dialog:getInputText()
+                    if name == "" then name = default_name end
+                    UIManager:close(input_dialog)
+                    local ok, err = IOSFolderAccess:savePickedFolder(Device, name, path, bookmark)
+                    if not ok then
+                        UIManager:show(InfoMessage:new{
+                            text = _("Could not save folder shortcut: ") .. (err or _("unknown error")),
+                        })
+                        return
+                    end
+                    self.folder_shortcuts = G_reader_settings:readSetting("folder_shortcuts", self.folder_shortcuts)
+                    if self.shortcuts_menu then
+                        self.fm_updated = true
+                        self:updateItemTable()
+                    end
+                end,
+            },
+        }},
+    }
+    UIManager:show(input_dialog)
+    input_dialog:onShowKeyboard()
+end
+
+function FileManagerShortcuts:addShortcut()
+    if Device.canPickExternalFolders and Device:canPickExternalFolders() then
+        local dialog
+        dialog = ButtonDialog:new{
+            title = _("Add folder shortcut"),
+            buttons = {{
+                {
+                    text = _("Choose local folder"),
+                    callback = function()
+                        UIManager:close(dialog)
+                        self:addLocalShortcut()
+                    end,
+                },
+                {
+                    text = _("Choose folder from Files"),
+                    callback = function()
+                        UIManager:close(dialog)
+                        self:addExternalFolderShortcut()
+                    end,
+                },
+            }},
+        }
+        UIManager:show(dialog)
+        return
+    end
+    self:addLocalShortcut()
 end
 
 function FileManagerShortcuts:genShowFolderShortcutsButton(pre_callback)

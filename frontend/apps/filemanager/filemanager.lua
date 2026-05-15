@@ -858,7 +858,7 @@ function FileManager:getPlusDialogButtons()
             })
         end
 
-        if Device:canImportFiles() then
+        if Device:canImportFiles() and Device.importFile then
             table.insert(buttons, 4, { -- always after "Paste" button
                 {
                     text = _("Import files here"),

@@ -13,23 +13,31 @@
 
 #include "SDL3/SDL_main.h"
 
-typedef NS_ENUM(NSInteger, KOPluginZipImportStatus) {
-    KOPluginZipImportStatusIdle = 0,
-    KOPluginZipImportStatusPending = 1,
-    KOPluginZipImportStatusFinished = 2,
-    KOPluginZipImportStatusCancelled = 3,
-    KOPluginZipImportStatusFailed = 4,
+typedef NS_ENUM(NSInteger, KOIOSPickerStatus) {
+    KOIOSPickerStatusIdle = 0,
+    KOIOSPickerStatusPending = 1,
+    KOIOSPickerStatusFinished = 2,
+    KOIOSPickerStatusCancelled = 3,
+    KOIOSPickerStatusFailed = 4,
 };
 
-static KOPluginZipImportStatus KOPluginZipStatus = KOPluginZipImportStatusIdle;
+static KOIOSPickerStatus KOPluginZipStatus = KOIOSPickerStatusIdle;
 static NSString *KOPluginZipPath;
 static NSString *KOPluginZipError;
+static KOIOSPickerStatus KOFileImportStatus = KOIOSPickerStatusIdle;
+static NSInteger KOFileImportCount = 0;
+static NSString *KOFileImportDestination;
+static NSString *KOFileImportError;
+static KOIOSPickerStatus KOExternalFolderStatus = KOIOSPickerStatusIdle;
+static NSString *KOExternalFolderPath;
+static NSString *KOExternalFolderBookmark;
+static NSString *KOExternalFolderError;
 
 static UIWindow *KOKeyWindow(void);
 static UIViewController *KORootViewController(void);
 static NSString *KOApplicationSupportPath(void);
 
-static void KOSetPluginZipResult(KOPluginZipImportStatus status, NSString *path, NSString *error) {
+static void KOSetPluginZipResult(KOIOSPickerStatus status, NSString *path, NSString *error) {
     @synchronized (NSProcessInfo.processInfo) {
         KOPluginZipStatus = status;
         KOPluginZipPath = [path copy];
@@ -39,7 +47,70 @@ static void KOSetPluginZipResult(KOPluginZipImportStatus status, NSString *path,
 
 static BOOL KOPluginZipImportIsPending(void) {
     @synchronized (NSProcessInfo.processInfo) {
-        return KOPluginZipStatus == KOPluginZipImportStatusPending;
+        return KOPluginZipStatus == KOIOSPickerStatusPending;
+    }
+}
+
+static void KOSetFileImportResult(KOIOSPickerStatus status, NSInteger count, NSString *destination, NSString *error) {
+    @synchronized (NSProcessInfo.processInfo) {
+        KOFileImportStatus = status;
+        KOFileImportCount = count;
+        KOFileImportDestination = [destination copy];
+        KOFileImportError = [error copy];
+    }
+}
+
+static BOOL KOFileImportIsPending(void) {
+    @synchronized (NSProcessInfo.processInfo) {
+        return KOFileImportStatus == KOIOSPickerStatusPending;
+    }
+}
+
+static void KOSetExternalFolderResult(KOIOSPickerStatus status, NSString *path, NSString *bookmark, NSString *error) {
+    @synchronized (NSProcessInfo.processInfo) {
+        KOExternalFolderStatus = status;
+        KOExternalFolderPath = [path copy];
+        KOExternalFolderBookmark = [bookmark copy];
+        KOExternalFolderError = [error copy];
+    }
+}
+
+static BOOL KOExternalFolderPickerIsPending(void) {
+    @synchronized (NSProcessInfo.processInfo) {
+        return KOExternalFolderStatus == KOIOSPickerStatusPending;
+    }
+}
+
+static NSMutableDictionary<NSString *, NSURL *> *KOExternalFolderActiveURLs(void) {
+    static NSMutableDictionary<NSString *, NSURL *> *activeURLs;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        activeURLs = [NSMutableDictionary dictionary];
+    });
+    return activeURLs;
+}
+
+static void KOSetActiveExternalFolderURL(NSString *bookmark, NSURL *url) {
+    if (bookmark.length == 0 || url == nil) return;
+    NSMutableDictionary<NSString *, NSURL *> *activeURLs = KOExternalFolderActiveURLs();
+    @synchronized (activeURLs) {
+        NSURL *oldURL = activeURLs[bookmark];
+        if (oldURL != nil) {
+            [oldURL stopAccessingSecurityScopedResource];
+        }
+        activeURLs[bookmark] = url;
+    }
+}
+
+static void KORemoveActiveExternalFolderURL(NSString *bookmark) {
+    if (bookmark.length == 0) return;
+    NSMutableDictionary<NSString *, NSURL *> *activeURLs = KOExternalFolderActiveURLs();
+    @synchronized (activeURLs) {
+        NSURL *url = activeURLs[bookmark];
+        if (url != nil) {
+            [url stopAccessingSecurityScopedResource];
+            [activeURLs removeObjectForKey:bookmark];
+        }
     }
 }
 
@@ -78,6 +149,76 @@ static const char *KORetainUTF8(NSString *string) {
         }
     }
     return copy.UTF8String;
+}
+
+static void KOCopyUTF8ToBuffer(NSString *string, char *buffer, size_t capacity) {
+    if (buffer == NULL || capacity == 0) return;
+    const char *value = string.UTF8String ?: "";
+    strlcpy(buffer, value, capacity);
+}
+
+static NSString *KOCreateExternalFolderBookmark(NSURL *url, NSError **error) {
+    NSData *bookmark = [url bookmarkDataWithOptions:0
+                    includingResourceValuesForKeys:nil
+                                     relativeToURL:nil
+                                             error:error];
+    if (bookmark == nil) return nil;
+    return [bookmark base64EncodedStringWithOptions:0];
+}
+
+static NSString *KOUniqueDestinationPath(NSString *directory, NSString *filename) {
+    if (filename.length == 0) filename = @"imported-file";
+    NSString *candidate = [directory stringByAppendingPathComponent:filename];
+    NSFileManager *fileManager = NSFileManager.defaultManager;
+    if (![fileManager fileExistsAtPath:candidate]) {
+        return candidate;
+    }
+
+    NSString *basename = filename.stringByDeletingPathExtension;
+    NSString *extension = filename.pathExtension;
+    for (NSInteger i = 2; i < NSIntegerMax; i++) {
+        NSString *nextName = extension.length > 0
+            ? [NSString stringWithFormat:@"%@-%ld.%@", basename, (long)i, extension]
+            : [NSString stringWithFormat:@"%@-%ld", basename, (long)i];
+        candidate = [directory stringByAppendingPathComponent:nextName];
+        if (![fileManager fileExistsAtPath:candidate]) {
+            return candidate;
+        }
+    }
+    return nil;
+}
+
+static BOOL KOImportFileURL(NSURL *url, NSString *destination, NSError **error) {
+    NSFileManager *fileManager = NSFileManager.defaultManager;
+    BOOL scoped = [url startAccessingSecurityScopedResource];
+    NSString *filename = url.lastPathComponent.length > 0 ? url.lastPathComponent : @"imported-file";
+    NSString *targetPath = KOUniqueDestinationPath(destination, filename);
+    if (targetPath.length == 0) {
+        if (scoped) [url stopAccessingSecurityScopedResource];
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:@"KOReaderIOSImport"
+                                         code:1
+                                     userInfo:@{NSLocalizedDescriptionKey: @"Could not create a unique destination filename."}];
+        }
+        return NO;
+    }
+
+    NSString *temporaryName = [NSString stringWithFormat:@".koreader-import-%@-%@", NSUUID.UUID.UUIDString, filename];
+    NSURL *temporaryURL = [NSURL fileURLWithPath:[destination stringByAppendingPathComponent:temporaryName]];
+    [fileManager removeItemAtURL:temporaryURL error:nil];
+    BOOL copied = [fileManager copyItemAtURL:url toURL:temporaryURL error:error];
+    if (scoped) [url stopAccessingSecurityScopedResource];
+    if (!copied) {
+        [fileManager removeItemAtURL:temporaryURL error:nil];
+        return NO;
+    }
+
+    NSURL *targetURL = [NSURL fileURLWithPath:targetPath];
+    BOOL moved = [fileManager moveItemAtURL:temporaryURL toURL:targetURL error:error];
+    if (!moved) {
+        [fileManager removeItemAtURL:temporaryURL error:nil];
+    }
+    return moved;
 }
 
 const char *KOIOSGetBundlePath(void) {
@@ -222,14 +363,14 @@ static KOPluginZipPickerDelegate *KOPluginZipPicker;
 
 - (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller {
     (void)controller;
-    KOSetPluginZipResult(KOPluginZipImportStatusCancelled, nil, nil);
+    KOSetPluginZipResult(KOIOSPickerStatusCancelled, nil, nil);
 }
 
 - (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     (void)controller;
     NSURL *url = urls.firstObject;
     if (url == nil) {
-        KOSetPluginZipResult(KOPluginZipImportStatusCancelled, nil, nil);
+        KOSetPluginZipResult(KOIOSPickerStatusCancelled, nil, nil);
         return;
     }
 
@@ -240,7 +381,7 @@ static KOPluginZipPickerDelegate *KOPluginZipPicker;
         NSString *importDir = [NSTemporaryDirectory() stringByAppendingPathComponent:@"koreader-plugin-imports"];
         if (![fileManager createDirectoryAtPath:importDir withIntermediateDirectories:YES attributes:nil error:&error]) {
             if (scoped) [url stopAccessingSecurityScopedResource];
-            KOSetPluginZipResult(KOPluginZipImportStatusFailed, nil, error.localizedDescription);
+            KOSetPluginZipResult(KOIOSPickerStatusFailed, nil, error.localizedDescription);
             return;
         }
 
@@ -252,11 +393,99 @@ static KOPluginZipPickerDelegate *KOPluginZipPicker;
         if (scoped) [url stopAccessingSecurityScopedResource];
 
         if (!copied) {
-            KOSetPluginZipResult(KOPluginZipImportStatusFailed, nil, error.localizedDescription);
+            KOSetPluginZipResult(KOIOSPickerStatusFailed, nil, error.localizedDescription);
             return;
         }
-        KOSetPluginZipResult(KOPluginZipImportStatusFinished, destURL.path, nil);
+        KOSetPluginZipResult(KOIOSPickerStatusFinished, destURL.path, nil);
     });
+}
+
+@end
+
+@interface KOFileImportPickerDelegate : NSObject <UIDocumentPickerDelegate>
+@end
+
+static KOFileImportPickerDelegate *KOFileImportPicker;
+
+@implementation KOFileImportPickerDelegate
+
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller {
+    (void)controller;
+    KOSetFileImportResult(KOIOSPickerStatusCancelled, 0, nil, nil);
+}
+
+- (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+    (void)controller;
+    NSString *destination;
+    @synchronized (NSProcessInfo.processInfo) {
+        destination = [KOFileImportDestination copy];
+    }
+    if (urls.count == 0 || destination.length == 0) {
+        KOSetFileImportResult(KOIOSPickerStatusCancelled, 0, destination, nil);
+        return;
+    }
+
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSInteger imported = 0;
+        NSMutableArray<NSString *> *errors = [NSMutableArray array];
+        for (NSURL *url in urls) {
+            NSError *error = nil;
+            if (KOImportFileURL(url, destination, &error)) {
+                imported++;
+            } else {
+                NSString *filename = url.lastPathComponent.length > 0 ? url.lastPathComponent : @"unknown";
+                NSString *message = error.localizedDescription ?: @"copy failed";
+                [errors addObject:[NSString stringWithFormat:@"%@: %@", filename, message]];
+            }
+        }
+
+        NSString *errorText = errors.count > 0 ? [errors componentsJoinedByString:@"\n"] : nil;
+        KOSetFileImportResult(imported > 0 ? KOIOSPickerStatusFinished : KOIOSPickerStatusFailed,
+                              imported,
+                              destination,
+                              errorText);
+    });
+}
+
+@end
+
+@interface KOExternalFolderPickerDelegate : NSObject <UIDocumentPickerDelegate>
+@end
+
+static KOExternalFolderPickerDelegate *KOExternalFolderPicker;
+
+@implementation KOExternalFolderPickerDelegate
+
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller {
+    (void)controller;
+    KOSetExternalFolderResult(KOIOSPickerStatusCancelled, nil, nil, nil);
+}
+
+- (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+    (void)controller;
+    NSURL *url = urls.firstObject;
+    if (url == nil) {
+        KOSetExternalFolderResult(KOIOSPickerStatusCancelled, nil, nil, nil);
+        return;
+    }
+
+    BOOL scoped = [url startAccessingSecurityScopedResource];
+    if (!scoped) {
+        KOSetExternalFolderResult(KOIOSPickerStatusFailed, nil, nil, @"Could not access the selected folder.");
+        return;
+    }
+
+    NSError *error = nil;
+    NSString *bookmark = KOCreateExternalFolderBookmark(url, &error);
+    if (bookmark.length == 0) {
+        [url stopAccessingSecurityScopedResource];
+        NSString *message = error.localizedDescription ?: @"Could not create a persistent folder bookmark.";
+        KOSetExternalFolderResult(KOIOSPickerStatusFailed, nil, nil, message);
+        return;
+    }
+
+    KOSetActiveExternalFolderURL(bookmark, url);
+    KOSetExternalFolderResult(KOIOSPickerStatusFinished, url.path, bookmark, nil);
 }
 
 @end
@@ -286,15 +515,15 @@ int KOIOSRequestPluginZipImport(void) {
     if (KOPluginZipImportIsPending()) {
         return 0;
     }
-    KOSetPluginZipResult(KOPluginZipImportStatusPending, nil, nil);
+    KOSetPluginZipResult(KOIOSPickerStatusPending, nil, nil);
     dispatch_async(dispatch_get_main_queue(), ^{
         UIViewController *root = KORootViewController();
         if (root == nil) {
-            KOSetPluginZipResult(KOPluginZipImportStatusFailed, nil, @"No active iOS window.");
+            KOSetPluginZipResult(KOIOSPickerStatusFailed, nil, @"No active iOS window.");
             return;
         }
         if (root.presentedViewController != nil) {
-            KOSetPluginZipResult(KOPluginZipImportStatusFailed, nil, @"Another iOS dialog is already open.");
+            KOSetPluginZipResult(KOIOSPickerStatusFailed, nil, @"Another iOS dialog is already open.");
             return;
         }
         if (KOPluginZipPicker == nil) {
@@ -327,7 +556,182 @@ const char *KOIOSGetPluginZipImportError(void) {
 }
 
 void KOIOSConsumePluginZipImportResult(void) {
-    KOSetPluginZipResult(KOPluginZipImportStatusIdle, nil, nil);
+    KOSetPluginZipResult(KOIOSPickerStatusIdle, nil, nil);
+}
+
+int KOIOSRequestFileImport(const char *destination_path) {
+    if (KOFileImportIsPending()) {
+        return 0;
+    }
+    NSString *destination = KOStringFromUTF8(destination_path);
+    BOOL isDirectory = NO;
+    if (destination.length == 0
+        || ![NSFileManager.defaultManager fileExistsAtPath:destination isDirectory:&isDirectory]
+        || !isDirectory) {
+        KOSetFileImportResult(KOIOSPickerStatusFailed, 0, destination, @"The destination folder does not exist.");
+        return 0;
+    }
+
+    KOSetFileImportResult(KOIOSPickerStatusPending, 0, destination, nil);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIViewController *root = KORootViewController();
+        if (root == nil) {
+            KOSetFileImportResult(KOIOSPickerStatusFailed, 0, destination, @"No active iOS window.");
+            return;
+        }
+        if (root.presentedViewController != nil) {
+            KOSetFileImportResult(KOIOSPickerStatusFailed, 0, destination, @"Another iOS dialog is already open.");
+            return;
+        }
+        if (KOFileImportPicker == nil) {
+            KOFileImportPicker = [KOFileImportPickerDelegate new];
+        }
+        UIDocumentPickerViewController *controller = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeData] asCopy:YES];
+        controller.delegate = KOFileImportPicker;
+        controller.allowsMultipleSelection = YES;
+        [root presentViewController:controller animated:YES completion:nil];
+    });
+    return 1;
+}
+
+int KOIOSGetFileImportStatus(void) {
+    @synchronized (NSProcessInfo.processInfo) {
+        return (int)KOFileImportStatus;
+    }
+}
+
+int KOIOSGetFileImportCount(void) {
+    @synchronized (NSProcessInfo.processInfo) {
+        return (int)KOFileImportCount;
+    }
+}
+
+const char *KOIOSGetFileImportError(void) {
+    @synchronized (NSProcessInfo.processInfo) {
+        return KORetainUTF8(KOFileImportError ?: @"");
+    }
+}
+
+void KOIOSConsumeFileImportResult(void) {
+    KOSetFileImportResult(KOIOSPickerStatusIdle, 0, nil, nil);
+}
+
+int KOIOSRequestExternalFolderPicker(void) {
+    if (KOExternalFolderPickerIsPending()) {
+        return 0;
+    }
+    KOSetExternalFolderResult(KOIOSPickerStatusPending, nil, nil, nil);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIViewController *root = KORootViewController();
+        if (root == nil) {
+            KOSetExternalFolderResult(KOIOSPickerStatusFailed, nil, nil, @"No active iOS window.");
+            return;
+        }
+        if (root.presentedViewController != nil) {
+            KOSetExternalFolderResult(KOIOSPickerStatusFailed, nil, nil, @"Another iOS dialog is already open.");
+            return;
+        }
+        if (KOExternalFolderPicker == nil) {
+            KOExternalFolderPicker = [KOExternalFolderPickerDelegate new];
+        }
+        UIDocumentPickerViewController *controller = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeFolder] asCopy:NO];
+        controller.delegate = KOExternalFolderPicker;
+        controller.allowsMultipleSelection = NO;
+        [root presentViewController:controller animated:YES completion:nil];
+    });
+    return 1;
+}
+
+int KOIOSGetExternalFolderPickerStatus(void) {
+    @synchronized (NSProcessInfo.processInfo) {
+        return (int)KOExternalFolderStatus;
+    }
+}
+
+const char *KOIOSGetExternalFolderPickerPath(void) {
+    @synchronized (NSProcessInfo.processInfo) {
+        return KORetainUTF8(KOExternalFolderPath ?: @"");
+    }
+}
+
+const char *KOIOSGetExternalFolderPickerBookmark(void) {
+    @synchronized (NSProcessInfo.processInfo) {
+        return KORetainUTF8(KOExternalFolderBookmark ?: @"");
+    }
+}
+
+const char *KOIOSGetExternalFolderPickerError(void) {
+    @synchronized (NSProcessInfo.processInfo) {
+        return KORetainUTF8(KOExternalFolderError ?: @"");
+    }
+}
+
+void KOIOSConsumeExternalFolderPickerResult(void) {
+    KOSetExternalFolderResult(KOIOSPickerStatusIdle, nil, nil, nil);
+}
+
+int KOIOSResolveExternalFolderBookmark(const char *bookmark_b64,
+                                       char *out_path, size_t path_capacity,
+                                       char *out_bookmark_b64, size_t bookmark_capacity,
+                                       char *out_error, size_t error_capacity) {
+    KOCopyUTF8ToBuffer(@"", out_path, path_capacity);
+    KOCopyUTF8ToBuffer(@"", out_bookmark_b64, bookmark_capacity);
+    KOCopyUTF8ToBuffer(@"", out_error, error_capacity);
+    if (bookmark_b64 == NULL || bookmark_b64[0] == '\0') {
+        KOCopyUTF8ToBuffer(@"Missing folder bookmark.", out_error, error_capacity);
+        return 0;
+    }
+
+    NSString *bookmarkString = KOStringFromUTF8(bookmark_b64);
+    NSData *bookmarkData = [[NSData alloc] initWithBase64EncodedString:bookmarkString options:0];
+    if (bookmarkData == nil) {
+        KOCopyUTF8ToBuffer(@"Invalid folder bookmark.", out_error, error_capacity);
+        return 0;
+    }
+
+    BOOL stale = NO;
+    NSError *error = nil;
+    NSURL *url = [NSURL URLByResolvingBookmarkData:bookmarkData
+                                           options:0
+                                     relativeToURL:nil
+                               bookmarkDataIsStale:&stale
+                                             error:&error];
+    if (url == nil) {
+        KOCopyUTF8ToBuffer(error.localizedDescription ?: @"Could not resolve folder bookmark.", out_error, error_capacity);
+        return 0;
+    }
+
+    if (![url startAccessingSecurityScopedResource]) {
+        KOCopyUTF8ToBuffer(@"Could not access the saved folder.", out_error, error_capacity);
+        return 0;
+    }
+
+    NSString *activeBookmark = bookmarkString;
+    if (stale) {
+        NSError *bookmarkError = nil;
+        NSString *refreshedBookmark = KOCreateExternalFolderBookmark(url, &bookmarkError);
+        if (refreshedBookmark.length > 0) {
+            activeBookmark = refreshedBookmark;
+            KOCopyUTF8ToBuffer(refreshedBookmark, out_bookmark_b64, bookmark_capacity);
+        } else {
+            NSLog(@"KOReader could not refresh stale external folder bookmark: %@", bookmarkError.localizedDescription);
+        }
+    }
+
+    KOSetActiveExternalFolderURL(activeBookmark, url);
+    if (![activeBookmark isEqualToString:bookmarkString]) {
+        KORemoveActiveExternalFolderURL(bookmarkString);
+    }
+    KOCopyUTF8ToBuffer(url.path, out_path, path_capacity);
+    return 1;
+}
+
+int KOIOSReleaseExternalFolderBookmark(const char *bookmark_b64) {
+    if (bookmark_b64 == NULL || bookmark_b64[0] == '\0') {
+        return 0;
+    }
+    KORemoveActiveExternalFolderURL(KOStringFromUTF8(bookmark_b64));
+    return 1;
 }
 
 static void KOSetEnv(NSString *name, NSString *value) {

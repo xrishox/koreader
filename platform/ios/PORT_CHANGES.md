@@ -21,8 +21,8 @@ The final runtime looks like this:
 - Lua sees iOS as a normal KOReader device implementation in
   `frontend/device/ios/device.lua`.
 - The Objective-C host in `platform/ios/native/KOReaderIOSMain.m` bridges iOS
-  paths, sharing, clipboard, safe-area insets, link opening, and document picker
-  plugin ZIP import.
+  paths, sharing, clipboard, safe-area insets, link opening, document picker
+  imports, and external folder access.
 
 ## Build Target Separation
 
@@ -153,7 +153,8 @@ The C bridge functions include:
 - external link opening;
 - clipboard read/write;
 - share sheet support;
-- document picker based plugin ZIP selection.
+- document picker based plugin ZIP and file import;
+- external folder picker and bookmark resolution.
 
 ## Data And Resource Paths
 
@@ -249,6 +250,18 @@ input support.
 
 The icon files in `platform/ios/icons/` are generated from the existing KOReader
 artwork and copied into the app bundle by the native CMake target.
+
+## Xcode Project Generation
+
+`platform/ios/project.yml` is the XcodeGen source for a local
+`KOReader.xcodeproj`. The generated project is ignored and should be recreated
+with `./kodev xcodeproj` when needed.
+
+The Xcode target compiles the same native Objective-C host used by the CMake
+bundle. Its build phases call `platform/ios/xcode-make.sh`, which maps Xcode's
+`PLATFORM_NAME` and `ARCHS` to the existing `TARGET=ios IOS_ARCH=...` Makefile
+flow, stages the KOReader payload, and embeds it into the Xcode-built `.app`.
+For hardware builds, Xcode owns the final Apple Development signing step.
 
 ## What This Port Does Not Do
 

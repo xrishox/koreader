@@ -12,6 +12,15 @@ describe("iOS device geometry", function()
         function fake_ios.getDocumentsPath() return "." end
         function fake_ios.getSafeAreaInsets() return fake_ios.insets end
         function fake_ios.canShareText() return false end
+        function fake_ios.shareText(text, reason, title, mimetype)
+            fake_ios.shared_text = {
+                text = text,
+                reason = reason,
+                title = title,
+                mimetype = mimetype,
+            }
+            return true
+        end
 
         local fake_sdl = {
             SDL = {
@@ -140,6 +149,49 @@ describe("iOS device geometry", function()
             assert.are.equals(0, input.hook_params.y)
             assert.are.equals(1, input.hook_count)
             assert.are.equals(290, device:getReaderUsableScreenSize().h)
+        end)
+    end)
+
+    it("hides unsupported user-facing iOS actions", function()
+        withIOSDevice({ top = 0, right = 0, bottom = 0, left = 0 }, function(Device, ios)
+            assert.is_false(Device:canSuspend())
+            assert.is_false(Device:canExecuteScript("script.sh"))
+            assert.is_function(Device.doShareText)
+
+            assert.is_true(Device:doShareText("text", "reason", "title", "text/plain"))
+            assert.are.equals("text", ios.shared_text.text)
+            assert.are.equals("reason", ios.shared_text.reason)
+            assert.are.equals("title", ios.shared_text.title)
+            assert.are.equals("text/plain", ios.shared_text.mimetype)
+        end)
+    end)
+
+    it("keeps native iOS lifecycle suspend and resume handlers", function()
+        withIOSDevice({ top = 0, right = 0, bottom = 0, left = 0 }, function(Device)
+            local calls = {}
+            local device = Device:new{
+                screen = newScreen(300, 600),
+                input = newInput(),
+            }
+            device._beforeSuspend = function(_, inhibit)
+                calls[#calls + 1] = { event = "suspend", inhibit = inhibit }
+            end
+            device._afterResume = function(_, inhibit)
+                calls[#calls + 1] = { event = "resume", inhibit = inhibit }
+            end
+
+            local uimgr = { event_handlers = {} }
+            device:setEventHandlers(uimgr)
+            assert.is_function(uimgr.event_handlers.Suspend)
+            assert.is_function(uimgr.event_handlers.Resume)
+
+            uimgr.event_handlers.Suspend()
+            uimgr.event_handlers.Resume()
+
+            assert.are.equals("suspend", calls[1].event)
+            assert.is_false(calls[1].inhibit)
+            assert.are.equals("resume", calls[2].event)
+            assert.is_false(calls[2].inhibit)
         end)
     end)
 

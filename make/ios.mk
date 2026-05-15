@@ -10,6 +10,7 @@ IOS_ARCH_NAME ?= $(patsubst sim-%,%,$(patsubst sim_%,%,$(patsubst simulator-%,%,
 IOS_MIN_VERSION ?= 15.0
 IOS_CC = $(shell xcrun -sdk $(IOS_SDK) -find clang)
 IOS_CXX = $(shell xcrun -sdk $(IOS_SDK) -find clang++)
+IOS_XCODE_DIR = $(CURDIR)/koreader-ios-xcode/$(IOS_SDK)
 
 define UPDATE_PATH_EXCLUDES +=
 plugins/SSH.koplugin
@@ -43,5 +44,49 @@ update: all
 	install -d $(INSTALL_DIR)/Payload
 	cp -R $(IOS_APP) $(INSTALL_DIR)/Payload/
 	cd $(INSTALL_DIR) && zip -qry $(abspath $(IOS_IPA)) Payload
+
+xcodeproj:
+	command -v xcodegen >/dev/null || { echo "xcodegen not found. Install it with: brew install xcodegen" >&2; exit 1; }
+	xcodegen generate \
+		--spec $(IOS_DIR)/project.yml \
+		--project $(CURDIR) \
+		--project-root $(CURDIR)
+	@echo "Generated $(CURDIR)/KOReader.xcodeproj"
+
+ios-xcode-stage: all
+	rm -rf $(IOS_XCODE_DIR)
+	install -d $(IOS_XCODE_DIR)
+	ln -s $(abspath $(STAGING_DIR)) $(IOS_XCODE_DIR)/staging
+	ln -s $(abspath $(INSTALL_DIR)) $(IOS_XCODE_DIR)/install
+
+ios-xcode-embed: ios-xcode-stage ios-xcode-embed-only
+
+ios-xcode-embed-only:
+	test -n '$(IOS_XCODE_APP)' || { echo "IOS_XCODE_APP is required" >&2; exit 2; }
+	rm -rf '$(IOS_XCODE_APP)/reader'
+	install -d '$(IOS_XCODE_APP)/reader'
+	cd $(INSTALL_DIR)/koreader && '$(abspath tools/mkrelease.sh)' '$(IOS_XCODE_APP)/reader/' . $(release_excludes)
+	/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $(IOS_BUNDLE_ID)" '$(IOS_XCODE_APP)/Info.plist'
+	/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $(IOS_NAME)" '$(IOS_XCODE_APP)/Info.plist'
+	/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(shell git rev-list --count HEAD)" '$(IOS_XCODE_APP)/Info.plist'
+	if [ "$${CODE_SIGNING_ALLOWED:-YES}" != "NO" ] && [ -n "$${EXPANDED_PROVISIONING_PROFILE:-}" ]; then \
+		exit 0; \
+	fi; \
+	sign_identity="$${EXPANDED_CODE_SIGN_IDENTITY:-$${CODE_SIGN_IDENTITY:-}}"; \
+	if [ "$${CODE_SIGNING_ALLOWED:-YES}" = "NO" ] \
+		|| [ -z "$${sign_identity}" ] \
+		|| [ "$${sign_identity}" = "iPhone Developer" ] \
+		|| [ "$${sign_identity}" = "Apple Development" ] \
+		|| [ "$${sign_identity}" = "-" ]; then \
+		sign_identity="-"; \
+		keychain_flags=""; \
+	else \
+		keychain_flags="$${OTHER_CODE_SIGN_FLAGS:-}"; \
+	fi; \
+	while IFS= read -r -d '' lib; do \
+		/usr/bin/codesign --force --sign "$${sign_identity}" --timestamp=none $${keychain_flags} "$${lib}" >/dev/null; \
+	done < <(find '$(IOS_XCODE_APP)/reader' -type f \( -name '*.dylib' -o -name '*.so' \) -print0)
+
+PHONY += xcodeproj ios-xcode-stage ios-xcode-embed ios-xcode-embed-only
 
 # vim: foldmethod=marker foldlevel=0
